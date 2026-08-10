@@ -46,6 +46,25 @@ If this system expands, the User Ledger database (users balance and ledger logs)
    cp .env.example .env
 
 ## **Test API**
+   ```Bash
+   npm test
+   
+   OR with Node's native test runner
+   ### Run all tests
+   ```Bash
+   node --test --test-concurrency=1 tests/**/*.test.js
+
+   OR with Node's native test runner - one by one   
+   ### Run only prompt sanitization unit tests
+   node --test tests/unit/prompt.test.js
+
+   ### Run only ledger integration tests
+   node --test tests/integration/ledger.test.js
+
+   ### Run only concurrency tests
+   node --test tests/integration/concurrency.test.js
+
+## **Start/Run/Use API**
 1. ```Bash
    npm start  
 
