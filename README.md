@@ -55,7 +55,7 @@ If this system expands, the User Ledger database (users balance and ledger logs)
      ```Bash
      npm test
 
-2. **One by one test with native test runner**:   
+2. **Run a specific test file**:   
    - Run only prompt sanitization unit tests
      ```Bash
      node --test tests/unit/prompt.test.js
