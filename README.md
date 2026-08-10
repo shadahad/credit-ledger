@@ -52,15 +52,15 @@ If this system expands, the User Ledger database (users balance and ledger logs)
    node --test --test-concurrency=1 tests/**/*.test.js   
 
 2. **One by one test with native test runner**:   
-   - Run only prompt sanitization unit tests
+   1. Run only prompt sanitization unit tests
    ```Bash
    node --test tests/unit/prompt.test.js
 
-   - Run only ledger integration tests
+   2. Run only ledger integration tests
    ```Bash
    node --test tests/integration/ledger.test.js
 
-   - Run only concurrency tests
+   3. Run only concurrency tests
    ```Bash
    node --test tests/integration/concurrency.test.js
 
