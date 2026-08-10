@@ -45,6 +45,8 @@ If this system expands, the User Ledger database (users balance and ledger logs)
    ```Bash
    cp .env.example .env
 
+   *Update .env file according to the environment*
+
 ## **Test API**
 1. ```Bash
    npm start  
