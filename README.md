@@ -39,7 +39,7 @@ If this system expands, the User Ledger database (users balance and ledger logs)
 
 1. **Clone project and install dependencies**:
    ```Bash
-   npm install
+   npm install express pg dotenv
 
 2. **Create .env for your local environment:**:
    ```Bash
