@@ -47,7 +47,7 @@ If this system expands, the User Ledger database (users balance and ledger logs)
 
 ## Test API
 
-1. **All tests with native test runner**:
+1. **All tests**:
    - Native test runner
      ```Bash
      node --test --test-concurrency=1 tests/**/*.test.js
