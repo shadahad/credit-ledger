@@ -41,7 +41,7 @@ If this system expands, the User Ledger database (users balance and ledger logs)
    ```Bash
    npm install
 
-2. **Copy .env.example to .env and Configure Environment Variables**:
+2. **Create .env for your local environment:**:
    ```Bash
    cp .env.example .env
 
