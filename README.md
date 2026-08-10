@@ -49,12 +49,12 @@ If this system expands, the User Ledger database (users balance and ledger logs)
    ```Bash
    npm test
    
-   OR with Node's native test runner
+   OR with Node native test runner
    ### Run all tests
    ```Bash
    node --test --test-concurrency=1 tests/**/*.test.js
 
-   OR with Node's native test runner - one by one   
+   OR with Node native test runner - one by one   
    ### Run only prompt sanitization unit tests
    node --test tests/unit/prompt.test.js
 
