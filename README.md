@@ -48,21 +48,23 @@ If this system expands, the User Ledger database (users balance and ledger logs)
 ## Test API
 
 1. **All tests with native test runner**:
-   ```Bash
-   node --test --test-concurrency=1 tests/**/*.test.js   
+   - Native test runner
+     ```Bash
+     node --test --test-concurrency=1 tests/**/*.test.js
+   - Package Manager
+     ```Bash
+     npm test
 
 2. **One by one test with native test runner**:   
-   1. Run only prompt sanitization unit tests
-   ```Bash
-   node --test tests/unit/prompt.test.js
-
-   2. Run only ledger integration tests
-   ```Bash
-   node --test tests/integration/ledger.test.js
-
-   3. Run only concurrency tests
-   ```Bash
-   node --test tests/integration/concurrency.test.js
+   - Run only prompt sanitization unit tests
+     ```Bash
+     node --test tests/unit/prompt.test.js
+   - Run only ledger integration tests
+     ```Bash
+     node --test tests/integration/ledger.test.js
+   - Run only concurrency tests
+     ```Bash
+     node --test tests/integration/concurrency.test.js
 
 ## Start/Run/Use API
 1. ```Bash
@@ -107,5 +109,3 @@ If this system expands, the User Ledger database (users balance and ledger logs)
 
    ```Bash (Check user balance - It shows the balance (no-charges) and 0 reserved amount)
    curl -X GET http://localhost:3000/users/<UserId>/balance
-
-
