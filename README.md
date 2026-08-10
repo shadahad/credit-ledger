@@ -66,46 +66,47 @@ If this system expands, the User Ledger database (users balance and ledger logs)
      ```Bash
      node --test tests/integration/concurrency.test.js
 
-## Start/Run/Use API
+## Start API
 1. ```Bash
    npm start  
-
+## Walk though endpoints
 2. Open a second Git Bash window within the project folder   
-   ```Bash (Check user balance - It shows the balance and 0 reserved amount)
-   curl -X GET http://localhost:3000/users/<UserId>/balance
-   
-   ```Bash (Post a new job)
-   curl -X POST http://localhost:3000/jobs \
-    -H "Content-Type: application/json" \
-    -d '{
-    "userId": "UUID 36-character text string",
-    "cost": 30,
-    "prompt": "Analyze sales report for Q3"
-   }'
-
-   ```Bash (Check user balance - It shows the balance and the reserved amount)
-   curl -X GET http://localhost:3000/users/:id/balance
-   
-   ```Bash (Complete the job)
-   curl -X POST http://localhost:3000/jobs/<JobId>/complete
-
-   ```Bash (Check user balance - It shows the remaining balance and 0 reserved amount)
-   curl -X GET http://localhost:3000/users/<UserId>/balance
-
-   ```Bash (Post another new job)
-   curl -X POST http://localhost:3000/jobs \
-    -H "Content-Type: application/json" \
-    -d '{
-    "userId": "UUID 36-character text string",
-    "cost": 20,
-    "prompt": "Generate image of a cat"
-   }'
-
-   ```Bash (Check user balance - It shows the balance and the reserved amount)
-   curl -X GET http://localhost:3000/users/:id/balance
-
-   ```Bash (Fail the job)
-   curl -X POST http://localhost:3000/jobs/<JobId>/fail
-
-   ```Bash (Check user balance - It shows the balance (no-charges) and 0 reserved amount)
-   curl -X GET http://localhost:3000/users/<UserId>/balance
+   - Check user balance
+     ```Bash (Check user balance - It shows the balance and 0 reserved amount)
+     curl -X GET http://localhost:3000/users/<UserId>/balance
+   - Post a job
+     ```Bash
+     curl -X POST http://localhost:3000/jobs \
+      -H "Content-Type: application/json" \
+      -d '{
+      "userId": "UUID 36-character text string",
+      "cost": 30,
+      "prompt": "Analyze sales report for Q3"
+     }'
+   - Check user balance again to view balance and reserved
+      ```Bash
+      curl -X GET http://localhost:3000/users/<UserId>/balance
+   - Complete the job
+     ```Bash (Complete the job)
+     curl -X POST http://localhost:3000/jobs/<JobId>/complete
+   - Check user balance again to observe balance and reserved
+     ```Bash (Check user balance - It shows the remaining balance and 0 reserved amount)
+     curl -X GET http://localhost:3000/users/<UserId>/balance
+   - Post another job
+     ```Bash
+     curl -X POST http://localhost:3000/jobs \
+      -H "Content-Type: application/json" \
+      -d '{
+      "userId": "UUID 36-character text string",
+      "cost": 20,
+      "prompt": "Generate image of a cat"
+     }'
+   - Check user balance again to observe balance and reserved
+     ```Bash
+     curl -X GET http://localhost:3000/users/<UserId>/balance
+   - Fail the job
+     ```Bash
+     curl -X POST http://localhost:3000/jobs/<JobId>/fail
+   - Check user balance again to observe balance and reserved
+     ```Bash
+     curl -X GET http://localhost:3000/users/<UserId>/balance
