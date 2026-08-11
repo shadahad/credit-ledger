@@ -1,15 +1,16 @@
-const { Pool } = require('pg');
 require('dotenv').config();
+const { Pool } = require('pg');
 
-const pool = new Pool({
-  host: process.env.PGHOST,
-  port: process.env.PGPORT,
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
-  database: process.env.PGDATABASE,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
+const pool = new Pool(
+  process.env.DATABASE_URL
+    ? { connectionString: process.env.DATABASE_URL }
+    : {
+        user: process.env.PGUSER || 'postgres',
+        host: process.env.PGHOST || 'localhost',
+        database: process.env.PGDATABASE || 'credit_ledger',
+        password: String(process.env.PGPASSWORD || ''), // Ensure password is always a string
+        port: Number(process.env.PGPORT) || 5432,
+      }
+);
 
 module.exports = pool;
