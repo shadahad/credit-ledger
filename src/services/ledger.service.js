@@ -1,8 +1,118 @@
+const crypto = require('crypto');
 const pool = require('../config/db');
 const { sanitizeAndAnonymizePrompt } = require('./prompt.service');
 const { NotFoundError, InsufficientCreditsError, ConflictError } = require('../errors/AppError');
 
+const GENESIS_HASH = '0'.repeat(64);
+
 class LedgerService {
+  /**
+   * Helper: Computes SHA-256 cryptographic hash for a ledger entry.
+   */
+  _calculateHash({ prevHash, userId, jobId, entryType, amount, balanceAfter, reservedAfter, createdAt }) {
+    const payload = [
+      prevHash,
+      userId,
+      jobId || '',
+      entryType,
+      amount.toString(),
+      balanceAfter.toString(),
+      reservedAfter.toString(),
+      new Date(createdAt).toISOString()
+    ].join('|');
+
+    return crypto.createHash('sha256').update(payload).digest('hex');
+  }
+
+  /**
+   * Helper: Inserts an immutable log entry with continuous hash chaining within an active transaction client.
+   */
+  async _recordLedgerEntry(client, { userId, jobId = null, entryType, amount, balanceAfter, reservedAfter }) {
+    const latestEntryRes = await client.query(
+      `SELECT hash FROM ledger_entries 
+       WHERE user_id = $1 
+       ORDER BY created_at DESC, id DESC 
+       LIMIT 1 FOR UPDATE`,
+      [userId]
+    );
+
+    const prevHash = latestEntryRes.rows.length > 0 
+      ? latestEntryRes.rows[0].hash 
+      : GENESIS_HASH;
+
+    const createdAt = new Date();
+
+    const hash = this._calculateHash({
+      prevHash,
+      userId,
+      jobId,
+      entryType,
+      amount,
+      balanceAfter,
+      reservedAfter,
+      createdAt
+    });
+
+    await client.query(
+      `INSERT INTO ledger_entries (
+        user_id, job_id, entry_type, amount, balance_after, reserved_after, prev_hash, hash, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        userId,
+        jobId,
+        entryType,
+        amount.toString(),
+        balanceAfter.toString(),
+        reservedAfter.toString(),
+        prevHash,
+        hash,
+        createdAt
+      ]
+    );
+  }
+
+  /**
+   * Top up user balance and record ledger entry.
+   */
+  async topUpUser(userId, amount) {
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const userRes = await client.query(
+        `UPDATE users 
+         SET balance = balance + $1 
+         WHERE id = $2 
+         RETURNING balance, reserved`,
+        [amount, userId]
+      );
+
+      if (userRes.rowCount === 0) {
+        throw new NotFoundError('User not found');
+      }
+
+      const balanceAfter = BigInt(userRes.rows[0].balance);
+      const reservedAfter = BigInt(userRes.rows[0].reserved);
+
+      await this._recordLedgerEntry(client, {
+        userId,
+        entryType: 'TOPUP',
+        amount,
+        balanceAfter,
+        reservedAfter
+      });
+
+      await client.query('COMMIT');
+      return { balance: balanceAfter.toString(), reserved: reservedAfter.toString() };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   /**
    * Reserve credits and create job atomically.
    */
@@ -30,11 +140,17 @@ class LedgerService {
         throw new InsufficientCreditsError('Insufficient credit balance available');
       }
 
-      // Increment reserved credits
-      await client.query(
-        'UPDATE users SET reserved = reserved + $1 WHERE id = $2',
+      // Increment reserved credits and return updated state
+      const updateRes = await client.query(
+        `UPDATE users 
+         SET reserved = reserved + $1 
+         WHERE id = $2 
+         RETURNING balance, reserved`,
         [cost, userId]
       );
+
+      const balanceAfter = BigInt(updateRes.rows[0].balance);
+      const reservedAfter = BigInt(updateRes.rows[0].reserved);
 
       // Create job record
       const jobRes = await client.query(
@@ -44,8 +160,20 @@ class LedgerService {
         [userId, cost, sanitizedPrompt]
       );
 
+      const job = jobRes.rows[0];
+
+      // Record immutable ledger entry
+      await this._recordLedgerEntry(client, {
+        userId,
+        jobId: job.id,
+        entryType: 'RESERVE',
+        amount: cost,
+        balanceAfter,
+        reservedAfter
+      });
+
       await client.query('COMMIT');
-      return jobRes.rows[0];
+      return job;
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -85,11 +213,27 @@ class LedgerService {
         [jobId]
       );
 
-      // Deduct cost from balance and reserved
-      await client.query(
-        'UPDATE users SET balance = balance - $1, reserved = reserved - $1 WHERE id = $2',
+      // Deduct cost from balance and reserved, returning updated user state
+      const userRes = await client.query(
+        `UPDATE users 
+         SET balance = balance - $1, reserved = reserved - $1 
+         WHERE id = $2 
+         RETURNING balance, reserved`,
         [job.cost, job.user_id]
       );
+
+      const balanceAfter = BigInt(userRes.rows[0].balance);
+      const reservedAfter = BigInt(userRes.rows[0].reserved);
+
+      // Record immutable ledger entry
+      await this._recordLedgerEntry(client, {
+        userId: job.user_id,
+        jobId: job.id,
+        entryType: 'COMMIT',
+        amount: job.cost,
+        balanceAfter,
+        reservedAfter
+      });
 
       await client.query('COMMIT');
       return { id: job.id, status: 'COMPLETED' };
@@ -132,11 +276,27 @@ class LedgerService {
         [jobId]
       );
 
-      // Release reserved credits
-      await client.query(
-        'UPDATE users SET reserved = reserved - $1 WHERE id = $2',
+      // Release reserved credits, returning updated user state
+      const userRes = await client.query(
+        `UPDATE users 
+         SET reserved = reserved - $1 
+         WHERE id = $2 
+         RETURNING balance, reserved`,
         [job.cost, job.user_id]
       );
+
+      const balanceAfter = BigInt(userRes.rows[0].balance);
+      const reservedAfter = BigInt(userRes.rows[0].reserved);
+
+      // Record immutable ledger entry
+      await this._recordLedgerEntry(client, {
+        userId: job.user_id,
+        jobId: job.id,
+        entryType: 'RELEASE',
+        amount: job.cost,
+        balanceAfter,
+        reservedAfter
+      });
 
       await client.query('COMMIT');
       return { id: job.id, status: 'FAILED' };

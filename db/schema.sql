@@ -27,21 +27,60 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 4. Create Ledger Entry Type ENUM safely
+DO $$ BEGIN
+    CREATE TYPE ledger_entry_type AS ENUM ('TOPUP', 'RESERVE', 'COMMIT', 'RELEASE', 'REFUND');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- 5. Create Ledger Entries Table
+CREATE TABLE IF NOT EXISTS ledger_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    job_id UUID NULL,
+    entry_type ledger_entry_type NOT NULL,
+    amount BIGINT NOT NULL CHECK (amount >= 0),
+    balance_after BIGINT NOT NULL CHECK (balance_after >= 0),
+    reserved_after BIGINT NOT NULL CHECK (reserved_after >= 0),
+    prev_hash VARCHAR(64) NOT NULL,
+    hash VARCHAR(64) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 6. Indexes
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_user ON ledger_entries (user_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_jobs_user_id ON jobs (user_id);
 
--- Immutability enforcement trigger (Requirement 9)
+-- 7. Immutability Trigger for Jobs
 CREATE OR REPLACE FUNCTION prevent_job_modification()
 RETURNS TRIGGER AS $$
 BEGIN
     IF OLD.status IN ('COMPLETED', 'FAILED') THEN
-        RAISE EXCEPTION 'Terminal state reached: Completed or Failed jobs cannot be updated or deleted.';
+        RAISE EXCEPTION 'Terminal state reached: Completed or Failed jobs cannot be updated or deleted.'
+            USING ERRCODE = 'P0001';
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS trg_enforce_job_immutability ON jobs;
-CREATE TRIGGER trg_enforce_job_immutability
+DROP TRIGGER IF EXISTS trg_prevent_job_modification ON jobs;
+CREATE TRIGGER trg_prevent_job_modification
 BEFORE UPDATE OR DELETE ON jobs
 FOR EACH ROW
 EXECUTE FUNCTION prevent_job_modification();
+
+-- 8. Immutability Trigger for Ledger Entries
+CREATE OR REPLACE FUNCTION prevent_ledger_tampering()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'CRITICAL AUDIT ERROR: Ledger history is immutable. Operation % denied on record %', TG_OP, OLD.id
+        USING ERRCODE = '27000';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_prevent_ledger_tampering ON ledger_entries;
+CREATE TRIGGER trg_prevent_ledger_tampering
+BEFORE UPDATE OR DELETE ON ledger_entries
+FOR EACH ROW
+EXECUTE FUNCTION prevent_ledger_tampering();
