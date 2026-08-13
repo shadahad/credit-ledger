@@ -13,12 +13,12 @@ app.post('/jobs', validateCreateJob, jobsController.createJob);
 app.post('/jobs/:id/complete', validateUUIDParam('id'), jobsController.completeJob);
 app.post('/jobs/:id/fail', validateUUIDParam('id'), jobsController.failJob);
 
-// User & Balance Routes
+// Users Routes 
 app.get('/users/:id/balance', validateUUIDParam('id'), usersController.getBalance);
-
-// Module B1: Audit & Provable Ledger Routes
-app.get('/users/:id/audit', validateUUIDParam('id'), auditController.verifyUserAudit);
-app.get('/users/:id/ledger', validateUUIDParam('id'), auditController.getLedgerHistory);
+app.get('/users/:id/audit', validateUUIDParam('id'), auditController.verifyUserAudit); // Module B1: Provable Ledger
+app.get('/users/:id/ledger', validateUUIDParam('id'), auditController.getLedgerHistory); // Module B1: Provable Ledger
+app.get('/users/:id', usersController.getBalance); // Module B2: Abandoned Reservation Cleanup
+app.post('/users/topup', usersController.topUp); // Module B2: Abandoned Reservation Cleanup
 
 // 404 Handler
 app.use((req, res) => {

@@ -1,13 +1,26 @@
 const ledgerService = require('../services/ledger.service');
 
-async function getBalance(req, res, next) {
+async function topUp(req, res, next) {
   try {
-    const { id } = req.params;
-    const balance = await ledgerService.getUserBalance(id);
-    res.status(200).json(balance);
+    const { userId, amount } = req.body;
+    const result = await ledgerService.topUpUser(userId, amount);
+    return res.status(200).json({
+      success: true,
+      data: result
+    });
   } catch (err) {
     next(err);
   }
 }
 
-module.exports = { getBalance };
+async function getBalance(req, res, next) {
+  try {
+    const { id } = req.params;
+    const result = await ledgerService.getUserBalance(id);
+    return res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { topUp, getBalance };

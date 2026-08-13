@@ -72,6 +72,79 @@ class LedgerService {
   }
 
   /**
+   * Module B2: Sweep and release abandoned reservations safely in batches.
+   * Uses FOR UPDATE SKIP LOCKED to prevent race conditions across concurrent workers/machines.
+   *
+   * @param {number} batchSize - Maximum expired jobs to process per transaction
+   * @returns {Promise<{ processedCount: number, releasedJobIds: string[] }>}
+   */
+  async releaseAbandonedReservations(batchSize = 100) {
+    const client = await pool.connect();
+    const releasedJobIds = [];
+
+    try {
+      await client.query('BEGIN');
+
+      // 1. Concurrently lock abandoned/expired jobs using SKIP LOCKED
+      const fetchQuery = `
+        SELECT id, user_id AS "userId", cost 
+        FROM jobs 
+        WHERE status = 'RESERVED' 
+          AND expires_at <= NOW() 
+        ORDER BY expires_at ASC 
+        LIMIT $1 
+        FOR UPDATE SKIP LOCKED
+      `;
+      const expiredJobsRes = await client.query(fetchQuery, [batchSize]);
+
+      if (expiredJobsRes.rowCount === 0) {
+        await client.query('COMMIT');
+        return { processedCount: 0, releasedJobIds: [] };
+      }
+
+      for (const job of expiredJobsRes.rows) {
+        // 2. Transition job to EXPIRED terminal state
+        await client.query(
+          "UPDATE jobs SET status = 'EXPIRED', updated_at = NOW() WHERE id = $1",
+          [job.id]
+        );
+
+        // 3. Release user reserved credits and obtain new balances
+        const userRes = await client.query(
+          `UPDATE users 
+           SET reserved = reserved - $1 
+           WHERE id = $2 
+           RETURNING balance, reserved`,
+          [job.cost, job.userId]
+        );
+
+        const balanceAfter = BigInt(userRes.rows[0].balance);
+        const reservedAfter = BigInt(userRes.rows[0].reserved);
+
+        // 4. Record tamper-evident ledger entry using existing helper
+        await this._recordLedgerEntry(client, {
+          userId: job.userId,
+          jobId: job.id,
+          entryType: 'RELEASE',
+          amount: job.cost,
+          balanceAfter,
+          reservedAfter
+        });
+
+        releasedJobIds.push(job.id);
+      }
+
+      await client.query('COMMIT');
+      return { processedCount: releasedJobIds.length, releasedJobIds };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Top up user balance and record ledger entry.
    */
   async topUpUser(userId, amount) {
