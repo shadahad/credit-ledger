@@ -22,9 +22,13 @@ app.use(
 // Job Routes
 // ==========================================
 app.post('/jobs', validateCreateJob, jobsController.createJob);
-app.get('/jobs/:id', validateUUIDParam('id'), jobsController.getJobById); // Module B7: Retrieve Job & Produced Result
+app.get('/jobs/:id', validateUUIDParam('id'), jobsController.getJobById);
 app.post('/jobs/:id/complete', validateUUIDParam('id'), jobsController.completeJob);
 app.post('/jobs/:id/fail', validateUUIDParam('id'), jobsController.failJob);
+
+// Module B4: Per-Job Audit Notes
+app.post('/jobs/:id/notes', validateUUIDParam('id'), jobsController.addJobNote);
+app.get('/jobs/:id/notes', validateUUIDParam('id'), jobsController.getJobNotes);
 
 // ==========================================
 // Module B3: Provider Webhook Route
@@ -35,10 +39,10 @@ app.post('/webhooks/provider', verifyWebhookSignature, webhookController.process
 // Users & Audit Routes
 // ==========================================
 app.get('/users/:id/balance', validateUUIDParam('id'), usersController.getBalance);
-app.get('/users/:id/audit', validateUUIDParam('id'), auditController.verifyUserAudit); // Module B1: Provable Ledger
-app.get('/users/:id/ledger', validateUUIDParam('id'), auditController.getLedgerHistory); // Module B1: Provable Ledger
-app.get('/users/:id', usersController.getBalance); // Module B2: Abandoned Reservation Cleanup
-app.post('/users/topup', usersController.topUp); // Module B2: Abandoned Reservation Cleanup
+app.get('/users/:id/audit', validateUUIDParam('id'), auditController.verifyUserAudit);
+app.get('/users/:id/ledger', validateUUIDParam('id'), auditController.getLedgerHistory);
+app.get('/users/:id', usersController.getBalance);
+app.post('/users/topup', usersController.topUp);
 
 // 404 Handler
 app.use((req, res) => {

@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const ledgerService = require('../services/ledger.service');
+const jobNoteService = require('../services/jobNote.service');
 const { NotFoundError } = require('../errors/AppError');
 
 /**
@@ -75,9 +76,38 @@ async function failJob(req, res, next) {
   }
 }
 
+/**
+ * Module B4: Add an audit note to a job.
+ */
+async function addJobNote(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { note, author } = req.body || {};
+    const createdNote = await jobNoteService.addNote(id, note, author);
+    res.status(201).json(createdNote);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Module B4: Retrieve all audit notes for a job.
+ */
+async function getJobNotes(req, res, next) {
+  try {
+    const { id } = req.params;
+    const notes = await jobNoteService.getNotesByJobId(id);
+    res.status(200).json({ jobId: id, notes });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   createJob,
   getJobById,
   completeJob,
-  failJob
+  failJob,
+  addJobNote,
+  getJobNotes
 };

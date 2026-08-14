@@ -105,3 +105,14 @@ CREATE TRIGGER trg_prevent_ledger_tampering
 BEFORE UPDATE OR DELETE ON ledger_entries
 FOR EACH ROW
 EXECUTE FUNCTION prevent_ledger_tampering();
+
+-- 10. Job Audit Notes Table (Module B4)
+CREATE TABLE IF NOT EXISTS job_audit_notes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    note TEXT NOT NULL CHECK (char_length(trim(note)) > 0),
+    author VARCHAR(100) NOT NULL DEFAULT 'system',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_audit_notes_job_id ON job_audit_notes (job_id, created_at ASC);

@@ -1,79 +1,105 @@
-# Credit Ledger — Secure Provider Webhooks & AI Job Runner (Modules B3 & B7)
+# Module B4: Zero-Downtime Job Audit Notes & Production Schema Evolution
 
 ## Summary
-This release implements **Module B3 (Hostile Network Webhook Provider)** and **Module B7 (AI Job Runner and Result Retrieval)** on top of the provable, immutable credit ledger. It provides end-to-end job execution by integrating real AI text APIs, safe multi-instance concurrency controls, replay-resistant and tamper-evident webhook delivery, and post-execution result retrieval.
-
----
+Module B4 evolves the live credit ledger platform by introducing a lightweight, per-job audit note capability without taking downtime, breaking existing API contracts, or invalidating any existing automated tests. It demonstrates a safe, production-grade schema migration strategy that preserves database immutability rules, transactional performance, and backward compatibility across all system modules.
 
 ## Design Decisions & Core Guarantees
 
-### 1. State Ownership (Module B3 vs Module B7)
-> **State ownership:** The Runner (B7) and Webhook (B3) both finalize jobs through atomic database transactions (`SELECT ... FOR UPDATE`); whichever settles the job first claims the terminal state (`COMPLETED` or `FAILED`), and subsequent attempts on that job are harmless no-ops.
-
-### 2. Hostile Network Defense (Module B3)
-- **HMAC SHA-256 Signatures**: Incoming webhook requests on `POST /webhooks/provider` require an `x-signature` header computed against the raw payload and the shared `WEBHOOK_SECRET`.
-- **Timing-Safe Verification**: Cryptographic signatures are verified using `crypto.timingSafeEqual` to prevent side-channel timing attacks.
-- **Replay Attack Resistance**: Every delivery carries an `eventId`. Unique event IDs are recorded atomically in the database (`processed_webhooks`); repeat deliveries return an idempotent `200 OK` response without duplicate ledger entries.
-
-### 3. Concurrency & Distributed Isolation (Module B7)
-- **Zero Double-Processing / Double-Charging**: Workers lock pending jobs using PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED`. Multiple runner instances operate concurrently without deadlocking, duplicating work, or double-charging user balances.
-- **Offline Test Suite Compliance**: The entire test suite runs with 100% offline isolation by stubbing the AI client, while live API execution is demonstrable via dedicated CLI scripts.
-- **Graceful Failure Handling**: If an external AI provider fails or rates limits, the job transitions to `FAILED`, the error message is recorded, and reserved credits are safely returned via a `RELEASE` ledger entry.
-
----
+1. **Additive, Non-Breaking Schema Evolution (Expand & Contract Pattern)**:
+   - All database changes are purely additive. Tables and indexes are provisioned using `IF NOT EXISTS` to avoid breaking existing queries or table structures.
+   - Existing endpoint contracts (`POST /jobs`, `GET /jobs/:id`, `POST /jobs/:id/complete`, `POST /jobs/:id/fail`) remain completely unchanged.
+2. **Terminal State Immutability Preservation**:
+   - The `jobs` table enforces terminal state immutability via a PostgreSQL trigger (`prevent_job_modification`) that rejects `UPDATE` and `DELETE` queries on jobs in `COMPLETED`, `FAILED`, or `EXPIRED` states.
+   - Placing audit notes into a dedicated `job_audit_notes` table allows operators and automated auditors to attach observations to completed or failed jobs without violating or altering database-level immutability triggers.
+3. **Idempotent Migration Runner**:
+   - Schema updates are tracked in a dedicated `schema_migrations` table inside an atomic transaction block (`BEGIN ... COMMIT`).
+   - Running migrations on startup or across multiple distributed instances is safe, idempotent, and resilient against race conditions.
+4. **Strict Input Validation**:
+   - Empty or whitespace-only audit notes are rejected with `400 Bad Request` (`ValidationError`).
+   - Audit note requests for non-existent job UUIDs return `404 Not Found` (`NotFoundError`).
 
 ## Architectural Assumptions
 
-1. **At-Least-Once Delivery**: External providers may resend identical events multiple times or with network delay. The ledger treats event processing as idempotent.
-2. **Provider Key Secrecy**: The `AI_API_KEY` and `WEBHOOK_SECRET` are managed strictly via environment variables and never committed to version control.
-3. **Pluggable AI Endpoint**: The AI client assumes OpenAI-compatible HTTP endpoints (e.g., OpenAI, Groq, OpenRouter) and can be configured with custom endpoints and models.
-
----
+- **Financial Ledger Isolation**: Core credit movements (reservations, commits, releases, refunds) take lock precedence on the `users` and `jobs` tables. Operational auditing runs independently and never introduces table or row locks on active financial transactions.
+- **Append-Only Auditing**: Audit notes are immutable, append-only chronological records of operator actions, AI routing diagnostics, and compliance verifications.
+- **Zero Downtime**: Migrations introduce zero exclusive locks on hot tables, ensuring that high-throughput credit processing runs uninterrupted during deployments.
 
 ## Data Model Separation Note
 
-- **Jobs Table (`jobs`)**: Stores user-submitted prompts, the current job status (`RESERVED`, `COMPLETED`, `FAILED`, `EXPIRED`), expiration timestamps, and the produced output (`result`).
-- **Ledger Entries Table (`ledger_entries`)**: A distinct, immutable audit log maintaining point-in-time balances and cryptographic SHA-256 hash chaining (`TOPUP`, `RESERVE`, `COMMIT`, `RELEASE`, `REFUND`).
-- **Processed Webhooks Table (`processed_webhooks`)**: Dedicated table recording incoming provider `eventId` records to enforce webhook idempotency independently of the job state.
-
----
+Instead of altering the `jobs` table directly, which would lock the table and conflict with terminal immutability triggers, the audit capability is decoupled into its own relation:
 
 ## Changes Made
 
-1. **Database Schema (`db/schema.sql`)**:
-   - Added `result TEXT NULL` to the `jobs` table to persist produced AI responses and error descriptions.
-   - Added `processed_webhooks` table with primary key `event_id` for replay protection.
-2. **Ledger Service (`src/services/ledger.service.js`)**:
-   - Updated `completeJob` and `failJob` to accept result payloads and support harmless resolution (`{ throwOnConflict: false }`) for background workers.
-3. **Webhook Subsystem (`src/middleware/verifyWebhookSignature.js`, `src/services/webhook.service.js`, `src/controllers/webhook.controller.js`)**:
-   - Added HMAC SHA-256 signature verification middleware and idempotency-backed webhook handler.
-4. **AI Runner Subsystem (`src/services/ai.client.js`, `src/services/runner.service.js`, `bin/demo-runner.js`)**:
-   - Created AI API client, `SKIP LOCKED` distributed worker runner, and live demonstration CLI script.
-5. **Jobs API (`src/controllers/jobs.controller.js`, `src/app.js`)**:
-   - Added `GET /jobs/:id` route to retrieve job metadata and produced output.
-   - Configured `express.json` raw-body retention for HMAC validation.
-6. **Automated Integration Tests**:
-   - Added `tests/integration/webhook.test.js` (B3 security, replay protection, ledger commits).
-   - Added `tests/integration/runner.test.js` (B7 AI runner execution, concurrency locking, and failure recovery).
-
----
+1. **Database Schema & Migrations**:
+   - Added `db/migrations/002_add_job_audit_notes.sql` defining `job_audit_notes` and its index.
+   - Updated `db/schema.sql` to include the new table and index for fresh database initializations.
+   - Updated `src/config/migrate.js` to run and track versioned migrations via `schema_migrations`.
+2. **Service Layer**:
+   - Created `src/services/jobNote.service.js` with `addNote(jobId, note, author)` and `getNotesByJobId(jobId)`.
+3. **Error Handling**:
+   - Added `ValidationError` to `src/errors/AppError.js` mapping to HTTP 400.
+4. **Controllers & Routing**:
+   - Added `addJobNote` and `getJobNotes` methods to `src/controllers/jobs.controller.js`.
+   - Registered `POST /jobs/:id/notes` and `GET /jobs/:id/notes` in `src/app.js`.
+5. **Testing Suite**:
+   - Added `tests/integration/auditNotes.test.js` covering note creation on active jobs, terminal-state jobs, non-existent job errors, and empty note validations.
 
 ## Prerequisites
 
-- **Node.js**: `v18.x` or higher
-- **PostgreSQL**: `v14.x` or higher
-- **Environment Variables**:
-  - `DATABASE_URL`: PostgreSQL connection string.
-  - `WEBHOOK_SECRET`: Shared secret for HMAC SHA-256 webhook signatures.
-  - `AI_API_KEY`: API key for AI text generation.
-  - `AI_API_URL`: Optional (default: `https://api.openai.com/v1/chat/completions`).
-  - `AI_MODEL`: Optional (default: `gpt-4o-mini`).
-
----
+- **Node.js**: `v18.0.0` or higher
+- **PostgreSQL**: `v14` or higher
+- Environment file (`.env`) with database connection parameters:
+  ```env
+  PORT=3000
+  DATABASE_URL=postgres://postgres:postgres@localhost:5432/credit_ledger
+  WEBHOOK_SECRET=your-shared-webhook-secret
 
 ## How to Run and Test
+1. Run Migrations & Start Server
+#### Setup database and apply migrations
+```npm run db:setup```
 
-### 1. Database Setup
-```bash
-# Initialize schema, triggers, and indexes
-npm run db:setup
+#### Start application server
+```npm start```
+
+2. Run Automated Test Suite
+```npm test```
+
+3. Manual Testing via curl (Git Bash)  
+  **A. Create a Job**
+   ```JOB_ID=$(curl -s -X POST http://localhost:3000/jobs \
+   -H "Content-Type: application/json" \
+   -d '{
+    "userId": "11111111-1111-1111-1111-111111111111",
+    "cost": 50,
+    "prompt": "Analyze transaction risk profile"
+    }' | grep -o '"id":"[^"]*' | head -n 1 | cut -d'"' -f4)
+
+   echo "Job ID: $JOB_ID"```
+  
+  **B. Attach an Audit Note to an Active Job**
+   ```
+   curl -i -X POST http://localhost:3000/jobs/$JOB_ID/notes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "note": "Job routed to secondary worker pool for priority processing",
+    "author": "ops-daemon"
+  }'
+   ```
+  **C. Complete the Job (Terminal State)**
+   ```
+   curl -i -X POST http://localhost:3000/jobs/$JOB_ID/complete \
+   -H "Content-Type: application/json" \
+   -d '{"result": "Risk analysis complete: Low Risk."}'
+   ```
+  **D. Attach a Compliance Audit Note to the Completed Job**
+   ```
+   curl -i -X POST http://localhost:3000/jobs/$JOB_ID/notes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "note": "Post-completion compliance review verified.",
+    "author": "auditor-01"
+   }'
+   ```
+  **E. Attach a Compliance Audit Note to the Completed Job**
+  ```curl -i -X GET http://localhost:3000/jobs/$JOB_ID/notes```

@@ -1,73 +1,107 @@
-# AI-LOG: Implementation of Modules B3 & B7
+# Engineering Log: Module B4 — Zero-Downtime Job Audit Notes & Safe Schema Evolution
 
-**Module Name**: Module B3 (Hostile Network Webhook Provider) & Module B7 (AI Job Runner and Result Retrieval)  
-**Project**: Credit Ledger  
-**Completion Status**: Completed & Fully Verified (21/21 Tests Passing)  
+**Module Name**: Module B4 (Per-Job Audit Note Capability & Production Schema Migration)  
+**Project**: Credit Ledger System  
+**Completion Status**: Fully Implemented, Integrated, and Verified (25/25 Passing Tests)  
 
 ---
 
 ## Module Summary
 
-Modules B3 and B7 establish the complete lifecycle of job execution and settlement for the Credit Ledger system:
-1. **Module B3 (Provider Webhook Security)**: Provides a hardened webhook endpoint (`POST /webhooks/provider`) resilient to hostile network conditions (replay attacks, unauthorized requests, and payload tampering) using constant-time HMAC SHA-256 signature verification and atomic `eventId` idempotency logging.
-2. **Module B7 (AI Runner & Result Retrieval)**: Implements an AI text completion client and a distributed background worker using PostgreSQL row locks (`SELECT FOR UPDATE SKIP LOCKED`). It guarantees that pending jobs are executed without race conditions or double-charging, records produced outputs in the database, allows output retrieval via `GET /jobs/:id`, and runs 100% offline during automated testing.
+Module B4 introduces an operational audit note capability to individual jobs on a live production ledger system. The enhancement was achieved without taking downtime, without altering or invalidating existing API contracts, and without violating database-level terminal immutability triggers.
+
+- **Additive Schema Evolution**: Created the `job_audit_notes` table and supporting indexes with zero downtime using non-locking `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` migration scripts.
+- **Terminal State Decoupling**: Implemented the audit notes mechanism outside of the core `jobs` table, allowing operators and auditors to append notes to jobs in any state (`RESERVED`, `COMPLETED`, `FAILED`, `EXPIRED`) without triggering the `prevent_job_modification` PostgreSQL trigger.
+- **Zero-Downtime Migration Runner**: Extended `src/config/migrate.js` to track sequential, versioned migrations idempotently via a new `schema_migrations` tracking table.
+- **REST Endpoints & Validation**: Exposed `POST /jobs/:id/notes` and `GET /jobs/:id/notes`, backed by strict input validation (`ValidationError` -> `400 Bad Request`) and relational existence checks (`NotFoundError` -> `404 Not Found`).
 
 ---
 
 ## Chronological Development & AI Engineering Log
 
-### Step 1: Schema & Data Model Evolution
-- **Objective**: Store AI execution outputs and track incoming webhook event identifiers for replay resistance.
-- **Actions**:
-  - Updated `db/schema.sql` to add `result TEXT NULL` to the `jobs` table.
-  - Added `processed_webhooks` table with `event_id VARCHAR(255) PRIMARY KEY` and foreign key reference to `jobs(id)`.
-  - Maintained PostgreSQL immutability triggers (`trg_prevent_job_modification` and `trg_prevent_ledger_tampering`).
+### Phase 1: Database Migration Strategy & Immutability Analysis
+- **Context & Constraints**:
+  - The `jobs` table has a strict immutability trigger (`prevent_job_modification`) that raises exception `P0001` on any `UPDATE` or `DELETE` when a job reaches a terminal state (`COMPLETED`, `FAILED`, `EXPIRED`).
+  - Directly altering the `jobs` table with an `audit_notes` column would either restrict note creation on finished jobs or require weakening the immutability trigger.
+- **Architectural Decision**:
+  - Apply the **Expand and Contract pattern**: Decouple the audit trail into a dedicated, normalized table `job_audit_notes` with a foreign key reference to `jobs(id)`.
+  - Created migration file `db/migrations/002_add_job_audit_notes.sql` and updated `db/schema.sql`.
 
-### Step 2: Ledger Service Harmonization (`src/services/ledger.service.js`)
-- **Objective**: Harmonize state transitions between the Runner (B7), Webhook (B3), and Reservation Cleaner (B2).
-- **Actions**:
-  - Updated `completeJob(jobId, result, options)` and `failJob(jobId, reason, options)` to persist result output into `jobs.result`.
-  - Added `{ throwOnConflict = true }` support: API endpoints throw strict `ConflictError` on terminal jobs, while background workers (Runner/Webhook) pass `{ throwOnConflict: false }` to exit harmlessly as no-ops without double-spending.
+### Phase 2: Schema Migration Runner Implementation
+- **Implementation**:
+  - Updated `src/config/migrate.js` to create and maintain an atomic `schema_migrations` tracking table.
+  - Ensured all migrations in `db/migrations/*.sql` run sequentially within a database transaction block (`BEGIN ... COMMIT`) and record applied versions to prevent duplicate execution across distributed application instances.
 
-### Step 3: Module B3 Webhook Architecture & Middleware
-- **Objective**: Build hostile network defenses for provider webhooks.
-- **Actions**:
-  - Configured `express.json` with a custom `verify` callback in `src/app.js` to preserve `req.rawBody`.
-  - Created `src/middleware/verifyWebhookSignature.js` using `crypto.createHmac('sha256', secret)` and `crypto.timingSafeEqual`.
-  - Created `src/services/webhook.service.js` implementing atomic insertion into `processed_webhooks` for replay prevention and delegating terminal state settlement to `ledger.service.js`.
-  - Added route `POST /webhooks/provider` in `src/app.js`.
+### Phase 3: Domain Service, Error Class, and Controller Implementation
+- **Implementation**:
+  - Created `src/services/jobNote.service.js` implementing `addNote(jobId, note, author)` and `getNotesByJobId(jobId)`.
+  - Added `ValidationError` to `src/errors/AppError.js` to distinguish input validation failures (HTTP 400) from unexpected server errors.
+  - Added controller functions `addJobNote` and `getJobNotes` in `src/controllers/jobs.controller.js`.
+  - Registered route bindings in `src/app.js` using `validateUUIDParam('id')`.
 
-### Step 4: Module B7 AI Client, Runner & Job Retrieval
-- **Objective**: Execute jobs via real AI APIs, support concurrent multi-instance runners, and retrieve outputs.
-- **Actions**:
-  - Built `src/services/ai.client.js` accepting `AI_API_KEY`, `AI_API_URL`, and `AI_MODEL` environment variables.
-  - Created `src/services/runner.service.js` using `SELECT ... FOR UPDATE SKIP LOCKED` for concurrency isolation.
-  - Added `GET /jobs/:id` in `src/controllers/jobs.controller.js` to expose job metadata and outputs.
-  - Implemented `bin/demo-runner.js` for standalone operational runs.
-
-### Step 5: Test Development & Debugging Iterations
-- **Issue 1: `AppError is not a constructor`**
-  - *Diagnosis*: `AppError.js` exported an object of named error classes (`{ AppError, BadRequestError, UnauthorizedError, ... }`).
-  - *Resolution*: Updated imports in middleware and services to extract named subclasses with resilient fallbacks.
-- **Issue 2: Test teardown failure against immutability triggers**
-  - *Diagnosis*: `tests/integration/webhook.test.js` attempted `DELETE FROM jobs` and `DELETE FROM ledger_entries` in `after()`, violating PostgreSQL trigger rules.
-  - *Resolution*: Replaced raw `DELETE` operations with safe async `server.close()` promises, relying on UUID isolation.
-- **Issue 3: Test runner picking up prior leftover reservations**
-  - *Diagnosis*: Earlier integration tests left `RESERVED` jobs in the shared test database, causing global `ORDER BY created_at ASC` queries to claim stale jobs from previous suites.
-  - *Resolution*: Extended `claimAndProcessNextJob({ userId })` with an optional `userId` filter for test isolation while keeping global sweeps as default.
+### Phase 4: Test Suite Integration & Bug Resolution
+- **Issue 1 (Error Constructor Mismatch)**:
+  - During test execution, `assert.rejects` received `BadRequestError` when expecting `ValidationError` due to fallback resolution.
+  - *Fix*: Exported `ValidationError` cleanly from `src/errors/AppError.js` and imported it directly into `jobNote.service.js`.
+- **Issue 2 (Immutable Ledger Deletion in Test Tear-Down)**:
+  - Integration test teardown failed with error `27000 (CRITICAL AUDIT ERROR: Ledger history is immutable)` because `tests/integration/auditNotes.test.js` attempted to run `DELETE FROM ledger_entries`.
+  - *Fix*: Updated test teardown to only delete rows from mutable tables (`job_audit_notes`), honoring the ledger immutability trigger.
 
 ---
 
 ## Verification & Testing Matrix
 
-| Test Suite | File | Tests | Status | Key Assertions Verified |
-|---|---|---|---|---|
-| **Provable Ledger & Audit** | `tests/integration/audit.test.js` | 3 | **PASSED** | Hash chaining, trigger tamper resistance, audit trail verification |
-| **Concurrency & Isolation** | `tests/integration/concurrency.test.js` | 4 | **PASSED** | Balance limits under race conditions, conflict errors on double-complete, distributed B2 cleanup |
-| **Ledger Core Integration** | `tests/integration/ledger.test.js` | 4 | **PASSED** | Job reservation, balance deductions, release on failure, credit limits |
-| **Module B7: AI Runner** | `tests/integration/runner.test.js` | 3 | **PASSED** | Single-spend claim via `SKIP LOCKED`, concurrent multi-worker isolation, AI error handling & release |
-| **Module B3: Webhook Security** | `tests/integration/webhook.test.js` | 5 | **PASSED** | 401 on missing signature, 403 on forged signature, valid HMAC completion, replay idempotency, failure refund |
-| **Prompt Sanitization** | `tests/unit/prompt.test.js` | 2 | **PASSED** | PII redaction, prompt injection token blocking |
-| **Total** | **6 Suites** | **21 Tests** | **ALL PASSED** | **100% Pass Rate (36.3s full suite runtime)** |
+| Module | Test File | Test Case | Invariant / Behavior Tested | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **B4** | `tests/integration/auditNotes.test.js` | Note on Active Job | Successfully appends an audit note to a `RESERVED` job | `PASS` |
+| **B4** | `tests/integration/auditNotes.test.js` | Note on Terminal Job | Appends audit note to a `COMPLETED` job without violating triggers | `PASS` |
+| **B4** | `tests/integration/auditNotes.test.js` | Non-Existent Job Check | Rejects note creation on unknown job UUID with `404 Not Found` | `PASS` |
+| **B4** | `tests/integration/auditNotes.test.js` | Empty Note Validation | Rejects empty and whitespace-only note payload with `400 Bad Request` | `PASS` |
+| **All**| `tests/**/*.test.js` | Regression Suite | All 25 tests across all 7 suites pass without regression | `PASS` |
 
 ---
+
+## Final Architectural State
+```
+┌────────────────────────────────────────────────────────┐
+                  │                   CLIENT HTTP API                      │
+                  └──────────────────────────┬─────────────────────────────┘
+                                             │
+              ┌──────────────────────────────┴─────────────────────────────┐
+              ▼                                                            ▼
+[ Existing Core Job Routes ]                                 [ Module B4: Audit Note Routes ]
+- POST /jobs                                                 - POST /jobs/:id/notes
+- GET  /jobs/:id                                             - GET  /jobs/:id/notes
+- POST /jobs/:id/complete                                                  │
+- POST /jobs/:id/fail                                                      │
+              │                                                            ▼
+              │                                              ┌───────────────────────────┐
+              │                                              │    JobNoteService         │
+              │                                              │ - Job existence check     │
+              │                                              │ - Input validation        │
+              │                                              │ - Chronological retrieval │
+              │                                              └─────────────┬─────────────┘
+              ▼                                                            │
+┌───────────────────────────┐                                              │
+│      LedgerService        │                                              │
+│ - Balance reservations    │                                              │
+│ - Hash chain generation   │                                              │
+└─────────────┬─────────────┘                                              │
+              │                                                            │
+              └──────────────────────────────┬─────────────────────────────┘
+                                             │
+                                             ▼
+                   ┌──────────────────────────────────────────────────┐
+                   │               PostgreSQL Database                │
+                   │                                                  │
+                   │ ┌────────────────┐         ┌───────────────────┐ │
+                   │ │     jobs       │◀──1:N───│  job_audit_notes  │ │
+                   │ │ (Immutable on  │         │ (Append-Only Log, │ │
+                   │ │ terminal state)│         │  Zero Locks)      │ │
+                   │ └────────────────┘         └───────────────────┘ │
+                   │ ┌────────────────┐         ┌───────────────────┐ │
+                   │ │ ledger_entries │         │schema_migrations  │ │
+                   │ │ (SHA-256 Chain)│         │ (Version Tracker) │ │
+                   │ └────────────────┘         └───────────────────┘ │
+                   └──────────────────────────────────────────────────┘
+```

@@ -14,6 +14,12 @@ class BadRequestError extends AppError {
   }
 }
 
+class ValidationError extends BadRequestError {
+  constructor(message = 'Validation failed') {
+    super(message);
+  }
+}
+
 class NotFoundError extends AppError {
   constructor(message = 'Resource not found') {
     super(message, 404);
@@ -35,6 +41,7 @@ class ConflictError extends AppError {
 module.exports = {
   AppError,
   BadRequestError,
+  ValidationError,
   NotFoundError,
   InsufficientCreditsError,
   ConflictError,
