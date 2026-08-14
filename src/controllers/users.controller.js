@@ -23,4 +23,15 @@ async function getBalance(req, res, next) {
   }
 }
 
-module.exports = { topUp, getBalance };
+async function getHistory(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { limit, cursor } = req.query;
+    const result = await ledgerService.getUserMovementHistory(id, { limit, cursor });
+    return res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { topUp, getBalance, getHistory };

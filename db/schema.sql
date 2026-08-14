@@ -116,3 +116,7 @@ CREATE TABLE IF NOT EXISTS job_audit_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_job_audit_notes_job_id ON job_audit_notes (job_id, created_at ASC);
+
+-- 11. Movement History Composite Index (Module B5 Keyset Pagination)
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_user_history 
+ON ledger_entries (user_id, created_at DESC, id DESC);

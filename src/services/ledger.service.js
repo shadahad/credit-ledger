@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
 const { sanitizeAndAnonymizePrompt } = require('./prompt.service');
-const { NotFoundError, InsufficientCreditsError, ConflictError } = require('../errors/AppError');
+const { NotFoundError, InsufficientCreditsError, ConflictError, BadRequestError } = require('../errors/AppError');
 
 const GENESIS_HASH = '0'.repeat(64);
 
@@ -25,7 +25,34 @@ class LedgerService {
   }
 
   /**
-   * Helper: Inserts an immutable log entry with continuous hash chaining within an active transaction client.
+   * Helper: Encodes cursor from createdAt and id.
+   */
+  _encodeCursor(createdAt, id) {
+    const payload = JSON.stringify({ createdAt: new Date(createdAt).toISOString(), id });
+    return Buffer.from(payload, 'utf8').toString('base64url');
+  }
+
+  /**
+   * Helper: Decodes base64url cursor.
+   */
+  _decodeCursor(cursorStr) {
+    try {
+      const decoded = Buffer.from(cursorStr, 'base64url').toString('utf8');
+      const parsed = JSON.parse(decoded);
+      if (!parsed.createdAt || !parsed.id) {
+        throw new Error('Invalid cursor payload structure');
+      }
+      return {
+        createdAt: new Date(parsed.createdAt).toISOString(),
+        id: parsed.id
+      };
+    } catch {
+      throw new BadRequestError('Invalid pagination cursor');
+    }
+  }
+
+  /**
+   * Helper: Inserts an immutable log entry with continuous hash chaining.
    */
   async _recordLedgerEntry(client, { userId, jobId = null, entryType, amount, balanceAfter, reservedAfter }) {
     const latestEntryRes = await client.query(
@@ -72,8 +99,104 @@ class LedgerService {
   }
 
   /**
-   * Module B2: Sweep and release abandoned reservations safely in batches.
-   * Uses FOR UPDATE SKIP LOCKED to prevent race conditions across concurrent workers/machines.
+   * Module B5: Keyset cursor-paginated movement history & daily aggregate totals.
+   */
+  async getUserMovementHistory(userId, options = {}) {
+    const limit = Math.min(Math.max(parseInt(options.limit, 10) || 20, 1), 100);
+    const { cursor } = options;
+
+    // 1. Verify user exists
+    const userRes = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+    if (userRes.rowCount === 0) {
+      throw new NotFoundError('User not found');
+    }
+
+    // 2. Build keyset query
+    let query;
+    let queryParams;
+
+    if (cursor) {
+      const decoded = this._decodeCursor(cursor);
+      query = `
+        SELECT 
+          id,
+          job_id AS "jobId",
+          entry_type AS "entryType",
+          amount,
+          balance_after AS "balanceAfter",
+          reserved_after AS "reservedAfter",
+          hash,
+          prev_hash AS "prevHash",
+          created_at AS "createdAt"
+        FROM ledger_entries
+        WHERE user_id = $1
+          AND (created_at, id) < ($2::timestamptz, $3::uuid)
+        ORDER BY created_at DESC, id DESC
+        LIMIT $4
+      `;
+      queryParams = [userId, decoded.createdAt, decoded.id, limit + 1];
+    } else {
+      query = `
+        SELECT 
+          id,
+          job_id AS "jobId",
+          entry_type AS "entryType",
+          amount,
+          balance_after AS "balanceAfter",
+          reserved_after AS "reservedAfter",
+          hash,
+          prev_hash AS "prevHash",
+          created_at AS "createdAt"
+        FROM ledger_entries
+        WHERE user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+      `;
+      queryParams = [userId, limit + 1];
+    }
+
+    const [entriesRes, dailyTotalsRes] = await Promise.all([
+      pool.query(query, queryParams),
+      pool.query(
+        `SELECT 
+          DATE(created_at AT TIME ZONE 'UTC')::text AS date,
+          COUNT(*)::int AS "totalEntries",
+          COALESCE(SUM(CASE WHEN entry_type = 'TOPUP' THEN amount ELSE 0 END), 0)::text AS "totalTopUp",
+          COALESCE(SUM(CASE WHEN entry_type = 'RESERVE' THEN amount ELSE 0 END), 0)::text AS "totalReserved",
+          COALESCE(SUM(CASE WHEN entry_type = 'COMMIT' THEN amount ELSE 0 END), 0)::text AS "totalCommitted",
+          COALESCE(SUM(CASE WHEN entry_type = 'RELEASE' THEN amount ELSE 0 END), 0)::text AS "totalReleased"
+        FROM ledger_entries
+        WHERE user_id = $1
+        GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+        ORDER BY date DESC
+        LIMIT 30`,
+        [userId]
+      )
+    ]);
+
+    const hasNextPage = entriesRes.rows.length > limit;
+    const items = hasNextPage ? entriesRes.rows.slice(0, limit) : entriesRes.rows;
+
+    let nextCursor = null;
+    if (hasNextPage && items.length > 0) {
+      const lastItem = items[items.length - 1];
+      nextCursor = this._encodeCursor(lastItem.createdAt, lastItem.id);
+    }
+
+    return {
+      userId,
+      items,
+      pagination: {
+        limit,
+        hasNextPage,
+        nextCursor
+      },
+      dailyTotals: dailyTotalsRes.rows
+    };
+  }
+
+  /**
+   * Sweep and release abandoned reservations safely in batches (Module B2).
    */
   async releaseAbandonedReservations(batchSize = 100) {
     const client = await pool.connect();
@@ -246,7 +369,6 @@ class LedgerService {
 
   /**
    * Complete job and finalize charge atomically.
-   * By default throws ConflictError on terminal jobs, or returns noop if throwOnConflict is false.
    */
   async completeJob(jobId, result = null, options = {}) {
     const { throwOnConflict = true } = options;
@@ -311,7 +433,6 @@ class LedgerService {
 
   /**
    * Fail job and release reserved credits atomically.
-   * By default throws ConflictError on terminal jobs, or returns noop if throwOnConflict is false.
    */
   async failJob(jobId, reason = null, options = {}) {
     const { throwOnConflict = true } = options;

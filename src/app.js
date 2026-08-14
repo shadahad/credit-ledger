@@ -38,6 +38,7 @@ app.post('/webhooks/provider', verifyWebhookSignature, webhookController.process
 // ==========================================
 // Users & Audit Routes
 // ==========================================
+app.get('/users/:id/history', validateUUIDParam('id'), usersController.getHistory);
 app.get('/users/:id/balance', validateUUIDParam('id'), usersController.getBalance);
 app.get('/users/:id/audit', validateUUIDParam('id'), auditController.verifyUserAudit);
 app.get('/users/:id/ledger', validateUUIDParam('id'), auditController.getLedgerHistory);
