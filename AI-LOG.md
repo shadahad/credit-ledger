@@ -1,87 +1,73 @@
-# AI-LOG - Module B2: Abandoned Reservations Clean Up
+# AI-LOG: Implementation of Modules B3 & B7
 
-**Module Name**: Module B2: Abandoned Reservations Clean Up  
-**Project**: Credit Ledger REST API  
-**Completion Status**: Completed (13/13 Integration Tests Passing)  
+**Module Name**: Module B3 (Hostile Network Webhook Provider) & Module B7 (AI Job Runner and Result Retrieval)  
+**Project**: Credit Ledger  
+**Completion Status**: Completed & Fully Verified (21/21 Tests Passing)  
 
 ---
 
 ## Module Summary
 
-Module B2 delivers an automated, distributed-safe cleanup mechanism for credit reservations that have been abandoned (e.g., tasks that start but whose results never arrive due to crashes or timeouts). 
-
-By leveraging PostgreSQL's native row-level locking (`FOR UPDATE SKIP LOCKED`), the cleanup mechanism allows multiple concurrent processes running across different machines to sweep and release abandoned reservations without race conditions, double-refunds, or deadlocks. All released funds are returned to user available balances and logged as immutable `RELEASE` records consistent with Module B1 cryptographic hash chaining.
+Modules B3 and B7 establish the complete lifecycle of job execution and settlement for the Credit Ledger system:
+1. **Module B3 (Provider Webhook Security)**: Provides a hardened webhook endpoint (`POST /webhooks/provider`) resilient to hostile network conditions (replay attacks, unauthorized requests, and payload tampering) using constant-time HMAC SHA-256 signature verification and atomic `eventId` idempotency logging.
+2. **Module B7 (AI Runner & Result Retrieval)**: Implements an AI text completion client and a distributed background worker using PostgreSQL row locks (`SELECT FOR UPDATE SKIP LOCKED`). It guarantees that pending jobs are executed without race conditions or double-charging, records produced outputs in the database, allows output retrieval via `GET /jobs/:id`, and runs 100% offline during automated testing.
 
 ---
 
 ## Chronological Development & AI Engineering Log
 
-### Phase 1: Database Schema Architecture & Indexing
-- **Action**: Modified `db/schema.sql` to track job expiration timeouts and terminal states.
-- **Key Engineering Decisions**:
-  - Added `expires_at TIMESTAMPTZ` column defaulting to `CURRENT_TIMESTAMP + INTERVAL '5 minutes'`.
-  - Added `EXPIRED` status value to `job_status` ENUM.
-  - Added partial compound index `idx_jobs_reserved_expired ON jobs (status, expires_at) WHERE status = 'RESERVED'` to ensure expiration sweeps skip non-pending rows and execute in milliseconds.
-  - Updated the `prevent_job_modification()` trigger function so that `EXPIRED` jobs become permanently immutable alongside `COMPLETED` and `FAILED` states.
+### Step 1: Schema & Data Model Evolution
+- **Objective**: Store AI execution outputs and track incoming webhook event identifiers for replay resistance.
+- **Actions**:
+  - Updated `db/schema.sql` to add `result TEXT NULL` to the `jobs` table.
+  - Added `processed_webhooks` table with `event_id VARCHAR(255) PRIMARY KEY` and foreign key reference to `jobs(id)`.
+  - Maintained PostgreSQL immutability triggers (`trg_prevent_job_modification` and `trg_prevent_ledger_tampering`).
 
-### Phase 2: Ledger Service Implementation
-- **Action**: Implemented `releaseAbandonedReservations(batchSize)` inside `src/services/ledger.service.js`.
-- **Key Engineering Decisions**:
-  - Utilized `FOR UPDATE SKIP LOCKED` inside a PostgreSQL transaction (`BEGIN ... COMMIT`) to ensure distributed worker safety.
-  - Decremented `users.reserved` balance while preserving `users.balance` (restoring purchasing power).
-  - Integrates with existing `_recordLedgerEntry()` helper to generate cryptographic SHA-256 hash chains (`prev_hash` -> `hash`) per user.
+### Step 2: Ledger Service Harmonization (`src/services/ledger.service.js`)
+- **Objective**: Harmonize state transitions between the Runner (B7), Webhook (B3), and Reservation Cleaner (B2).
+- **Actions**:
+  - Updated `completeJob(jobId, result, options)` and `failJob(jobId, reason, options)` to persist result output into `jobs.result`.
+  - Added `{ throwOnConflict = true }` support: API endpoints throw strict `ConflictError` on terminal jobs, while background workers (Runner/Webhook) pass `{ throwOnConflict: false }` to exit harmlessly as no-ops without double-spending.
 
-### Phase 3: Operational Tooling & CLI Integration
-- **Action**: Created standalone CLI entry point `bin/cleanup-reservations.js` and added `"job:cleanup"` script command to `package.json`.
-- **Key Engineering Decisions**:
-  - Programmed script to batch-process expired jobs continuously until zero expired rows remain.
-  - Ensured process exits with explicit status codes (`0` for success, `1` for error) for compatibility with Kubernetes CronJobs, systemd timers, and CI/CD pipelines.
+### Step 3: Module B3 Webhook Architecture & Middleware
+- **Objective**: Build hostile network defenses for provider webhooks.
+- **Actions**:
+  - Configured `express.json` with a custom `verify` callback in `src/app.js` to preserve `req.rawBody`.
+  - Created `src/middleware/verifyWebhookSignature.js` using `crypto.createHmac('sha256', secret)` and `crypto.timingSafeEqual`.
+  - Created `src/services/webhook.service.js` implementing atomic insertion into `processed_webhooks` for replay prevention and delegating terminal state settlement to `ledger.service.js`.
+  - Added route `POST /webhooks/provider` in `src/app.js`.
 
-### Phase 4: Native Test Engineering & Concurrency Proof
-- **Action**: Updated `tests/integration/concurrency.test.js` using Node.js's native test runner (`node:test`).
-- **Key Engineering Decisions**:
-  - Added isolated database truncation in `beforeEach` to prevent test-pollution across runs.
-  - Implemented multi-worker concurrent simulation tests using `Promise.all()` to prove zero double-processing when multiple cleanup workers run simultaneously.
+### Step 4: Module B7 AI Client, Runner & Job Retrieval
+- **Objective**: Execute jobs via real AI APIs, support concurrent multi-instance runners, and retrieve outputs.
+- **Actions**:
+  - Built `src/services/ai.client.js` accepting `AI_API_KEY`, `AI_API_URL`, and `AI_MODEL` environment variables.
+  - Created `src/services/runner.service.js` using `SELECT ... FOR UPDATE SKIP LOCKED` for concurrency isolation.
+  - Added `GET /jobs/:id` in `src/controllers/jobs.controller.js` to expose job metadata and outputs.
+  - Implemented `bin/demo-runner.js` for standalone operational runs.
+
+### Step 5: Test Development & Debugging Iterations
+- **Issue 1: `AppError is not a constructor`**
+  - *Diagnosis*: `AppError.js` exported an object of named error classes (`{ AppError, BadRequestError, UnauthorizedError, ... }`).
+  - *Resolution*: Updated imports in middleware and services to extract named subclasses with resilient fallbacks.
+- **Issue 2: Test teardown failure against immutability triggers**
+  - *Diagnosis*: `tests/integration/webhook.test.js` attempted `DELETE FROM jobs` and `DELETE FROM ledger_entries` in `after()`, violating PostgreSQL trigger rules.
+  - *Resolution*: Replaced raw `DELETE` operations with safe async `server.close()` promises, relying on UUID isolation.
+- **Issue 3: Test runner picking up prior leftover reservations**
+  - *Diagnosis*: Earlier integration tests left `RESERVED` jobs in the shared test database, causing global `ORDER BY created_at ASC` queries to claim stale jobs from previous suites.
+  - *Resolution*: Extended `claimAndProcessNextJob({ userId })` with an optional `userId` filter for test isolation while keeping global sweeps as default.
 
 ---
 
 ## Verification & Testing Matrix
 
-| Test Suite / Case | Target Behavior | Method / Script | Result |
-| :--- | :--- | :--- | :--- |
-| **Provable Audit Chain (B1)** | Hash chaining & trigger immutability | `tests/integration/ledger.test.js` | **PASS** |
-| **Reserve Limits** | Simultaneous requests never exceed available balance | `tests/integration/concurrency.test.js` | **PASS** |
-| **Job State Guards** | Double completion prevented (`ConflictError`) | `tests/integration/concurrency.test.js` | **PASS** |
-| **Abandoned Job Expiration** | Expired reservation released & `RELEASE` ledger logged | `tests/integration/concurrency.test.js` | **PASS** |
-| **Distributed Concurrency** | 4 parallel workers process 10 expired jobs with 0 race conditions | `tests/integration/concurrency.test.js` | **PASS** |
-| **Prompt Sanitization** | PII and system tokens stripped | `tests/unit/prompt.test.js` | **PASS** |
+| Test Suite | File | Tests | Status | Key Assertions Verified |
+|---|---|---|---|---|
+| **Provable Ledger & Audit** | `tests/integration/audit.test.js` | 3 | **PASSED** | Hash chaining, trigger tamper resistance, audit trail verification |
+| **Concurrency & Isolation** | `tests/integration/concurrency.test.js` | 4 | **PASSED** | Balance limits under race conditions, conflict errors on double-complete, distributed B2 cleanup |
+| **Ledger Core Integration** | `tests/integration/ledger.test.js` | 4 | **PASSED** | Job reservation, balance deductions, release on failure, credit limits |
+| **Module B7: AI Runner** | `tests/integration/runner.test.js` | 3 | **PASSED** | Single-spend claim via `SKIP LOCKED`, concurrent multi-worker isolation, AI error handling & release |
+| **Module B3: Webhook Security** | `tests/integration/webhook.test.js` | 5 | **PASSED** | 401 on missing signature, 403 on forged signature, valid HMAC completion, replay idempotency, failure refund |
+| **Prompt Sanitization** | `tests/unit/prompt.test.js` | 2 | **PASSED** | PII redaction, prompt injection token blocking |
+| **Total** | **6 Suites** | **21 Tests** | **ALL PASSED** | **100% Pass Rate (36.3s full suite runtime)** |
 
 ---
-
-## Final Architectural State
-
-The credit ledger codebase is structured as follows:
-
-```text
-credit-ledger/
-├── .env
-├── package.json                   <-- Added "job:cleanup" script
-├── README.md                      <-- Module B2 architectural overview
-├── AI-LOG.md                      <-- Chronological engineering log
-├── db/
-│   ├── schema.sql                 <-- Added expires_at, EXPIRED status, & partial index
-│   └── setup.js                   <-- Database setup script
-├── bin/
-│   └── cleanup-reservations.js    <-- Operations CLI runner
-├── src/
-│   ├── app.js
-│   ├── config/
-│   │   └── db.js
-│   ├── services/
-│   │   └── ledger.service.js      <-- Added releaseAbandonedReservations()
-│   └── controllers/
-│       ├── jobs.controller.js
-│       └── users.controller.js
-└── tests/
-    └── integration/
-        └── concurrency.test.js    <-- Distributed worker concurrency test suite

@@ -74,9 +74,6 @@ class LedgerService {
   /**
    * Module B2: Sweep and release abandoned reservations safely in batches.
    * Uses FOR UPDATE SKIP LOCKED to prevent race conditions across concurrent workers/machines.
-   *
-   * @param {number} batchSize - Maximum expired jobs to process per transaction
-   * @returns {Promise<{ processedCount: number, releasedJobIds: string[] }>}
    */
   async releaseAbandonedReservations(batchSize = 100) {
     const client = await pool.connect();
@@ -85,7 +82,6 @@ class LedgerService {
     try {
       await client.query('BEGIN');
 
-      // 1. Concurrently lock abandoned/expired jobs using SKIP LOCKED
       const fetchQuery = `
         SELECT id, user_id AS "userId", cost 
         FROM jobs 
@@ -103,13 +99,11 @@ class LedgerService {
       }
 
       for (const job of expiredJobsRes.rows) {
-        // 2. Transition job to EXPIRED terminal state
         await client.query(
           "UPDATE jobs SET status = 'EXPIRED', updated_at = NOW() WHERE id = $1",
           [job.id]
         );
 
-        // 3. Release user reserved credits and obtain new balances
         const userRes = await client.query(
           `UPDATE users 
            SET reserved = reserved - $1 
@@ -121,7 +115,6 @@ class LedgerService {
         const balanceAfter = BigInt(userRes.rows[0].balance);
         const reservedAfter = BigInt(userRes.rows[0].reserved);
 
-        // 4. Record tamper-evident ledger entry using existing helper
         await this._recordLedgerEntry(client, {
           userId: job.userId,
           jobId: job.id,
@@ -196,7 +189,6 @@ class LedgerService {
     try {
       await client.query('BEGIN');
 
-      // Lock user row for update to prevent concurrent updates
       const userRes = await client.query(
         'SELECT balance, reserved FROM users WHERE id = $1 FOR UPDATE',
         [userId]
@@ -213,7 +205,6 @@ class LedgerService {
         throw new InsufficientCreditsError('Insufficient credit balance available');
       }
 
-      // Increment reserved credits and return updated state
       const updateRes = await client.query(
         `UPDATE users 
          SET reserved = reserved + $1 
@@ -225,7 +216,6 @@ class LedgerService {
       const balanceAfter = BigInt(updateRes.rows[0].balance);
       const reservedAfter = BigInt(updateRes.rows[0].reserved);
 
-      // Create job record
       const jobRes = await client.query(
         `INSERT INTO jobs (user_id, cost, prompt, status) 
          VALUES ($1, $2, $3, 'RESERVED') 
@@ -235,7 +225,6 @@ class LedgerService {
 
       const job = jobRes.rows[0];
 
-      // Record immutable ledger entry
       await this._recordLedgerEntry(client, {
         userId,
         jobId: job.id,
@@ -257,14 +246,15 @@ class LedgerService {
 
   /**
    * Complete job and finalize charge atomically.
+   * By default throws ConflictError on terminal jobs, or returns noop if throwOnConflict is false.
    */
-  async completeJob(jobId) {
+  async completeJob(jobId, result = null, options = {}) {
+    const { throwOnConflict = true } = options;
     const client = await pool.connect();
 
     try {
       await client.query('BEGIN');
 
-      // Lock job row
       const jobRes = await client.query(
         'SELECT * FROM jobs WHERE id = $1 FOR UPDATE',
         [jobId]
@@ -277,16 +267,18 @@ class LedgerService {
       const job = jobRes.rows[0];
 
       if (job.status !== 'RESERVED') {
-        throw new ConflictError(`Cannot complete job with status '${job.status}'`);
+        if (throwOnConflict) {
+          throw new ConflictError(`Cannot complete job with status '${job.status}'`);
+        }
+        await client.query('COMMIT');
+        return { id: job.id, status: job.status, result: job.result, noop: true };
       }
 
-      // Update job to COMPLETED
       await client.query(
-        "UPDATE jobs SET status = 'COMPLETED', updated_at = NOW() WHERE id = $1",
-        [jobId]
+        "UPDATE jobs SET status = 'COMPLETED', result = $2, updated_at = NOW() WHERE id = $1",
+        [jobId, result]
       );
 
-      // Deduct cost from balance and reserved, returning updated user state
       const userRes = await client.query(
         `UPDATE users 
          SET balance = balance - $1, reserved = reserved - $1 
@@ -298,7 +290,6 @@ class LedgerService {
       const balanceAfter = BigInt(userRes.rows[0].balance);
       const reservedAfter = BigInt(userRes.rows[0].reserved);
 
-      // Record immutable ledger entry
       await this._recordLedgerEntry(client, {
         userId: job.user_id,
         jobId: job.id,
@@ -309,7 +300,7 @@ class LedgerService {
       });
 
       await client.query('COMMIT');
-      return { id: job.id, status: 'COMPLETED' };
+      return { id: job.id, status: 'COMPLETED', result, noop: false };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -320,14 +311,15 @@ class LedgerService {
 
   /**
    * Fail job and release reserved credits atomically.
+   * By default throws ConflictError on terminal jobs, or returns noop if throwOnConflict is false.
    */
-  async failJob(jobId) {
+  async failJob(jobId, reason = null, options = {}) {
+    const { throwOnConflict = true } = options;
     const client = await pool.connect();
 
     try {
       await client.query('BEGIN');
 
-      // Lock job row
       const jobRes = await client.query(
         'SELECT * FROM jobs WHERE id = $1 FOR UPDATE',
         [jobId]
@@ -340,16 +332,18 @@ class LedgerService {
       const job = jobRes.rows[0];
 
       if (job.status !== 'RESERVED') {
-        throw new ConflictError(`Cannot fail job with status '${job.status}'`);
+        if (throwOnConflict) {
+          throw new ConflictError(`Cannot fail job with status '${job.status}'`);
+        }
+        await client.query('COMMIT');
+        return { id: job.id, status: job.status, result: job.result, noop: true };
       }
 
-      // Update job to FAILED
       await client.query(
-        "UPDATE jobs SET status = 'FAILED', updated_at = NOW() WHERE id = $1",
-        [jobId]
+        "UPDATE jobs SET status = 'FAILED', result = $2, updated_at = NOW() WHERE id = $1",
+        [jobId, reason]
       );
 
-      // Release reserved credits, returning updated user state
       const userRes = await client.query(
         `UPDATE users 
          SET reserved = reserved - $1 
@@ -361,7 +355,6 @@ class LedgerService {
       const balanceAfter = BigInt(userRes.rows[0].balance);
       const reservedAfter = BigInt(userRes.rows[0].reserved);
 
-      // Record immutable ledger entry
       await this._recordLedgerEntry(client, {
         userId: job.user_id,
         jobId: job.id,
@@ -372,7 +365,7 @@ class LedgerService {
       });
 
       await client.query('COMMIT');
-      return { id: job.id, status: 'FAILED' };
+      return { id: job.id, status: 'FAILED', result: reason, noop: false };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;

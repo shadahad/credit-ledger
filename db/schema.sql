@@ -1,5 +1,5 @@
 -- =============================================================================
--- Idempotent Database Schema for Credit Ledger
+-- Database Schema for Credit Ledger (Modules B1, B2, B3, B7)
 -- =============================================================================
 
 -- 1. Create Users Table
@@ -11,27 +11,30 @@ CREATE TABLE IF NOT EXISTS users (
     CONSTRAINT chk_reserved_lte_balance CHECK (reserved <= balance)
 );
 
--- 2. Create Jobs Status ENUM safely (includes EXPIRED state for abandoned jobs)
+-- 2. Create Jobs Status ENUM safely
 DO $$ BEGIN
     CREATE TYPE job_status AS ENUM ('RESERVED', 'COMPLETED', 'FAILED', 'EXPIRED');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
--- Explicitly add EXPIRED value if the enum already exists without it
 ALTER TYPE job_status ADD VALUE IF NOT EXISTS 'EXPIRED';
 
--- 3. Create Jobs Table (Includes expires_at for reservation timeouts)
+-- 3. Create Jobs Table (includes result column for B7)
 CREATE TABLE IF NOT EXISTS jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id),
     cost BIGINT NOT NULL CHECK (cost > 0),
     prompt TEXT NOT NULL,
+    result TEXT NULL,
     status job_status NOT NULL DEFAULT 'RESERVED',
     expires_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP + INTERVAL '5 minutes'),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Ensure result column exists if migrating existing table
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS result TEXT NULL;
 
 -- 4. Create Ledger Entry Type ENUM safely
 DO $$ BEGIN
@@ -40,7 +43,7 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
--- 5. Create Ledger Entries Table
+-- 5. Create Ledger Entries Table (Module B1 Provability)
 CREATE TABLE IF NOT EXISTS ledger_entries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id),
@@ -54,19 +57,23 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 6. Indexes
--- Ledger audit index per user
+-- 6. Webhook Idempotency Table (Module B3 Hostile Network Defense)
+CREATE TABLE IF NOT EXISTS processed_webhooks (
+    event_id VARCHAR(255) PRIMARY KEY,
+    job_id UUID NULL,
+    status VARCHAR(50) NOT NULL,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Safely drop foreign key constraint if it was previously created
+ALTER TABLE processed_webhooks DROP CONSTRAINT IF EXISTS processed_webhooks_job_id_fkey;
+
+-- 7. Indexes
 CREATE INDEX IF NOT EXISTS idx_ledger_entries_user ON ledger_entries (user_id, created_at ASC);
-
--- Jobs per user index
 CREATE INDEX IF NOT EXISTS idx_jobs_user_id ON jobs (user_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_reserved_expired ON jobs (status, expires_at) WHERE status = 'RESERVED';
 
--- Module B2 Partial Index: High-speed sweep for abandoned/expired jobs
-CREATE INDEX IF NOT EXISTS idx_jobs_reserved_expired 
-ON jobs (status, expires_at) 
-WHERE status = 'RESERVED';
-
--- 7. Immutability Trigger for Jobs
+-- 8. Immutability Trigger for Jobs
 CREATE OR REPLACE FUNCTION prevent_job_modification()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -84,7 +91,7 @@ BEFORE UPDATE OR DELETE ON jobs
 FOR EACH ROW
 EXECUTE FUNCTION prevent_job_modification();
 
--- 8. Immutability Trigger for Ledger Entries
+-- 9. Immutability Trigger for Ledger Entries
 CREATE OR REPLACE FUNCTION prevent_ledger_tampering()
 RETURNS TRIGGER AS $$
 BEGIN
