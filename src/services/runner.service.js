@@ -1,6 +1,23 @@
 const pool = require('../config/db');
 const ledgerService = require('./ledger.service');
 const aiClient = require('./ai.client');
+const knowledgeService = require('./knowledge.service');
+
+/**
+ * Enriches a job prompt with the 3 most relevant knowledge entries from the local knowledge store.
+ */
+function buildPromptWithKnowledge(prompt) {
+  const relevantDocs = knowledgeService.search(prompt, 3);
+  if (!relevantDocs || relevantDocs.length === 0) {
+    return prompt;
+  }
+
+  const contextBlock = relevantDocs
+    .map(doc => `[${doc.title}]\n${doc.content}`)
+    .join('\n\n');
+
+  return `Relevant Knowledge Context:\n${contextBlock}\n\nTask:\n${prompt}`;
+}
 
 /**
  * Claims and processes the next pending RESERVED job using FOR UPDATE SKIP LOCKED.
@@ -42,9 +59,10 @@ async function claimAndProcessNextJob(options = {}) {
     client.release();
   }
 
-  // Execute AI Call
+  // Execute AI Call with Knowledge-Augmented Prompt
   try {
-    const output = await aiClient.generateText(claimedJob.prompt);
+    const finalPrompt = buildPromptWithKnowledge(claimedJob.prompt);
+    const output = await aiClient.generateText(finalPrompt);
     await ledgerService.completeJob(claimedJob.id, output, { throwOnConflict: false });
     return { jobId: claimedJob.id, status: 'COMPLETED', result: output };
   } catch (err) {
@@ -69,7 +87,8 @@ async function processJobById(jobId) {
   }
 
   try {
-    const output = await aiClient.generateText(job.prompt);
+    const finalPrompt = buildPromptWithKnowledge(job.prompt);
+    const output = await aiClient.generateText(finalPrompt);
     const outcome = await ledgerService.completeJob(job.id, output, { throwOnConflict: false });
     return outcome;
   } catch (err) {

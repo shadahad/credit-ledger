@@ -3,13 +3,13 @@ const jobsController = require('./controllers/jobs.controller');
 const usersController = require('./controllers/users.controller');
 const auditController = require('./controllers/audit.controller');
 const webhookController = require('./controllers/webhook.controller');
+const knowledgeController = require('./controllers/knowledge.controller');
 const verifyWebhookSignature = require('./middleware/verifyWebhookSignature');
 const { validateCreateJob, validateUUIDParam } = require('./middleware/validate');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 
-// Parse JSON with raw body capture for tamper-evident HMAC signature verification
 app.use(
   express.json({
     verify: (req, res, buf) => {
@@ -29,6 +29,11 @@ app.post('/jobs/:id/fail', validateUUIDParam('id'), jobsController.failJob);
 // Module B4: Per-Job Audit Notes
 app.post('/jobs/:id/notes', validateUUIDParam('id'), jobsController.addJobNote);
 app.get('/jobs/:id/notes', validateUUIDParam('id'), jobsController.getJobNotes);
+
+// ==========================================
+// Module B6: Knowledge Store Search Route
+// ==========================================
+app.get('/knowledge/search', knowledgeController.searchKnowledge);
 
 // ==========================================
 // Module B3: Provider Webhook Route
