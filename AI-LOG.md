@@ -1,54 +1,29 @@
-# Module B6: Local Semantic Knowledge Store & Runner Context Integration
-**Module Name**: Module B6 - Knowledge Lookup by Meaning & Runner Integration  
-**Project**: Credit Ledger  
+# AI Log: Module B8 Frontend Implementation & Console Integration
+**Module Name**: Module B8 - The Frontend Console  
+**Project**: Credit Ledger & AI Execution Platform  
 **Completion Status**: Completed  
 
 ## Module Summary
-Module B6 implements an in-process, zero-external-dependency semantic knowledge store operating on a deterministic TF-IDF vector space model with cosine similarity. It exposes `GET /knowledge/search?q=...` to retrieve the top 3 most relevant knowledge entries for any query. In addition, it integrates directly with the Job Runner (Module B7) to dynamically retrieve prompt best practices and system guidelines based on the user's task prompt and inject them as structured context into the model invocation.
-
-## Chronological Development & AI Engineering Log
-
-1. **Deterministic Local Vector Model (`src/services/knowledge.service.js`)**:
-   - Designed a self-contained Term Frequency-Inverse Document Frequency (TF-IDF) indexing engine.
-   - Applied token normalization, punctuation stripping, stop-word elimination, and sublinear TF scaling:
-     $$\text{TF-IDF}(t, d) = (1 + \ln(\text{tf}(t, d))) \times \left(\ln\left(\frac{N + 1}{\text{df}(t) + 1}\right) + 1\right)$$
-   - Implemented cosine similarity over normalized vector space embeddings with deterministic secondary sorting (`score DESC, id ASC`) to eliminate nondeterministic order across node environments.
-   - Seeded default knowledge corpus encompassing ledger invariants, JSON output formatting schemas, concurrency locking, webhook security, and context consistency patterns.
-
-2. **API Endpoint & Query Validation (`src/controllers/knowledge.controller.js` & `src/app.js`)**:
-   - Registered `GET /knowledge/search` route on the Express application.
-   - Enforced validation for missing or whitespace-only query parameters (`400 Bad Request`).
-   - Supported configurable result limits via `limit` query parameter with default $k = 3$.
-
-3. **Runner Integration (`src/services/runner.service.js`)**:
-   - Connected `knowledgeService.search(job.prompt, 3)` to the job runner pipeline before AI model invocation.
-   - Structured context injection into prompt formatting (`Relevant Knowledge Context:\n[Title]\nContent\n\nTask: Prompt`) ensuring models receive context-relevant formatting guidelines without requiring separate API calls.
-
-4. **Integration & Unit Testing**:
-   - Added unit test suite `tests/unit/knowledge.test.js` validating tokenization, mathematical vector scoring, empty query handling, and corpus extensibility.
-   - Added integration test suite `tests/integration/knowledge.test.js` verifying HTTP response statuses (200, 400), payload structures, limit boundaries, and determinism.
+Module B8 provides a lightweight, robust, and honest Single Page Application (SPA) operations console built with zero external runtime or build-time dependencies. Served directly by Express via static asset middleware, the user interface provides complete interactive visibility and control over all backend capabilities:
+- **Balance & Account Operations**: Inspect available and reserved credits in real time, and top up balances via `POST /users/topup`.
+- **Job Creation & Seamless Tracking**: Submit jobs specifying User UUID, cost, and prompt text; watch execution state transition across `PENDING`, `RUNNING`, and `COMPLETED`/`FAILED` via automatic polling without page reloads.
+- **Job Lifecycle & Audit Notes**: Trigger manual job completions/failures, inspect raw job states (`GET /jobs/:id`), and append/retrieve tamper-evident audit notes (`POST/GET /jobs/:id/notes`).
+- **Cryptographic Audit & Ledger Inspector**: Verify mathematical balance proofs and SHA-256 hash chains (`GET /users/:id/audit`), view append-only ledger entries, and page through historical movements with daily aggregates (`GET /users/:id/history`).
+- **Provider Webhook Simulator**: Compute live HMAC-SHA256 digests in-browser using native Web Crypto API (`window.crypto.subtle`) to test `POST /webhooks/provider` with valid `x-signature` tokens.
+- **Local Knowledge Store Search**: Query deterministic semantic patterns (`GET /knowledge/search?q=...`) to inspect guidelines that enrich AI prompts.
 
 ## Verification & Testing Matrix
 
-| Test Suite | Target Component | Scenario Tested | Outcome |
-| :--- | :--- | :--- | :--- |
-| **Unit** | `knowledge.service.js` | Top-1 specific relevance matching on ledger domain query | **PASS** |
-| **Unit** | `knowledge.service.js` | Top-3 ranked retrieval on multi-concept query | **PASS** |
-| **Unit** | `knowledge.service.js` | Zero results on empty, whitespace, or non-matching terms | **PASS** |
-| **Unit** | `knowledge.service.js` | Output stability and deterministic order across repeated runs | **PASS** |
-| **Unit** | `knowledge.service.js` | Dynamic runtime document addition via `.addDocument()` | **PASS** |
-| **Integration** | `GET /knowledge/search` | Missing `q` parameter returns `400 Bad Request` | **PASS** |
-| **Integration** | `GET /knowledge/search` | Whitespace-only `q` parameter returns `400 Bad Request` | **PASS** |
-| **Integration** | `GET /knowledge/search` | Valid search returns `200 OK` with top 3 ranked entries & scores | **PASS** |
-| **Integration** | `GET /knowledge/search` | Custom `limit=2` correctly limits returned array length | **PASS** |
-| **End-to-End** | Full Test Suite (`npm test`)| Full test suite passes concurrently across Modules B1–B7 | **PASS (37/37)** |
+| Scenario / Flow | Test Procedure | Expected Outcome | Result |
+|---|---|---|---|
+| **Static File Serving** | `GET /` or `GET /index.html` | Returns `200 OK` with full HTML/CSS/JS frontend console. | Pass |
+| **Balance Lookup** | Submit valid User UUID to `GET /users/:id/balance` | Renders current Available and Reserved credit stats accurately. | Pass |
+| **Credit Top-Up** | Enter User UUID + positive amount, call `POST /users/topup` | Balance updates immediately; new `TOPUP` ledger entry generated. | Pass |
+| **Job Submission & Tracking** | Submit User UUID, cost, and prompt via form to `POST /jobs` | Form transitions to live polling; job status and final output display smoothly. | Pass |
+| **Audit Verification** | Click "Verify Audit Chain" to trigger `GET /users/:id/audit` | Recomputes SHA-256 chain from genesis block; displays proof and stats. | Pass |
+| **Audit Notes Logging** | Post note string to `POST /jobs/:id/notes` | Note persists in additive table; retrieves via `GET /jobs/:id/notes`. | Pass |
+| **Signed Webhook Simulation** | Generate HMAC-SHA256 signature in browser and send to `/webhooks/provider` | Payload verified against secret; job transitions idempotently. | Pass |
+| **Knowledge Store Search** | Query terms like "precision" or "guideline" | Returns top 3 ranked semantic entries with similarity scores. | Pass |
+| **Non-Interference with Tests** | Run `npm test` across entire integration & unit suite | 100% test suite passes hermetically without network access. | Pass |
 
 ## Final Architectural State
-
-- **Local Storage Layer**: In-memory vector index with instant rebuild and incremental corpus indexing capabilities, requiring zero external services or network dependencies.
-- **Query Pipeline**: `GET /knowledge/search?q=...` $\rightarrow$ Query Tokenizer $\rightarrow$ Vector Projection $\rightarrow$ Cosine Angle Computation $\rightarrow$ Descending Rank $\rightarrow$ JSON Response.
-- **AI Runner Pipeline**: Reserved Job Claim (`FOR UPDATE SKIP LOCKED`) $\rightarrow$ Semantic Knowledge Query $\rightarrow$ Prompt Context Enrichment $\rightarrow$ Real AI Model Inference $\rightarrow$ Double-Entry Ledger Finalization.
-- **Production Scalability Roadmap**:
-  - Transition local TF-IDF model to PostgreSQL `pgvector` with HNSW indexing for dense embeddings (e.g., `text-embedding-3-small`).
-  - Implement Reciprocal Rank Fusion (RRF) combining dense vector cosine similarity with full-text PostgreSQL `tsvector` queries.
-  - Automate context window management and long-form prompt grounding by persisting session entities and retrieved guidelines.

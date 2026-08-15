@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Credit Ledger & AI Job Console</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-hover: #0284c7;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --border: #334155;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 2rem 1rem; line-height: 1.5; }
+    .container { max-width: 960px; margin: 0 auto; display: grid; gap: 1.5rem; }
+    header { text-align: center; margin-bottom: 0.5rem; }
+    h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.25rem; }
+    p.subtitle { color: var(--text-muted); font-size: 0.95rem; }
+
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+    .card h2 { font-size: 1.2rem; margin-bottom: 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+
+    .form-group { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
+    label { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); }
+    input, textarea, select { background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.8rem; color: var(--text); font-size: 0.95rem; }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+    textarea { min-height: 70px; resize: vertical; }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .grid-3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 1rem; }
+    @media (max-width: 768px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+    .btn { background: var(--accent); color: #000; font-weight: 600; padding: 0.6rem 1.2rem; border: none; border-radius: 6px; cursor: pointer; transition: all 0.2s ease; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; }
+    .btn:hover { background: var(--accent-hover); }
+    .btn-secondary { background: #334155; color: var(--text); }
+    .btn-secondary:hover { background: #475569; }
+    .btn-success { background: var(--success); color: #000; }
+    .btn-success:hover { background: #16a34a; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-warning { background: var(--warning); color: #000; }
+    .btn-warning:hover { background: #d97706; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .btn-group { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 9999px; font-size: 0.8rem; font-weight: 700; text-transform: uppercase; }
+    .badge-pending { background: rgba(245, 158, 11, 0.2); color: var(--warning); border: 1px solid var(--warning); }
+    .badge-running { background: rgba(56, 189, 248, 0.2); color: var(--accent); border: 1px solid var(--accent); }
+    .badge-completed { background: rgba(34, 197, 94, 0.2); color: var(--success); border: 1px solid var(--success); }
+    .badge-failed { background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid var(--danger); }
+
+    .balance-stats { display: flex; gap: 1rem; margin-top: 1rem; }
+    .stat-box { flex: 1; background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 0.8rem; text-align: center; }
+    .stat-val { font-size: 1.4rem; font-weight: 700; color: var(--text); }
+    .stat-lbl { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; margin-top: 0.25rem; }
+
+    .result-box { margin-top: 1rem; background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 1rem; max-height: 320px; overflow-y: auto; }
+    .result-box pre { white-space: pre-wrap; word-break: break-word; font-family: monospace; font-size: 0.85rem; color: #e2e8f0; }
+
+    .knowledge-item { background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; margin-bottom: 0.5rem; }
+    .knowledge-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; }
+    .knowledge-title { font-weight: 600; color: var(--accent); }
+    .knowledge-score { font-size: 0.75rem; color: var(--text-muted); background: #1e293b; padding: 0.1rem 0.4rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Credit Ledger & AI Console</h1>
+      <p class="subtitle">Real-time ledger audit, job lifecycles, webhook simulator, and semantic search</p>
+    </header>
+
+    <!-- SECTION 1: User Balance & Top-up -->
+    <section class="card">
+      <h2>1. User Account & Credits</h2>
+      <div class="grid-3">
+        <div class="form-group" style="margin-bottom: 0;">
+          <label for="userIdInput">User ID (UUID)</label>
+          <input type="text" id="userIdInput" placeholder="e.g. a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11">
+        </div>
+        <div class="form-group" style="margin-bottom: 0;">
+          <label for="topUpAmountInput">Top-up Amount</label>
+          <input type="number" id="topUpAmountInput" value="100" min="1" step="1">
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: flex-end;">
+          <button class="btn" id="btnCheckBalance" style="flex: 1;">Balance</button>
+          <button class="btn btn-success" id="btnTopUp" style="flex: 1;">Top Up</button>
+        </div>
+      </div>
+
+      <div class="balance-stats" id="balanceContainer" style="display: none;">
+        <div class="stat-box">
+          <div class="stat-val" id="statBalance">0</div>
+          <div class="stat-lbl">Available Credits</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-val" id="statReserved">0</div>
+          <div class="stat-lbl">Reserved Credits</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 2: Audit & History Inspector -->
+    <section class="card">
+      <h2>2. Audit, Ledger & Movement History</h2>
+      <p style="font-size: 0.85rem; color: var(--text-muted);">Inspect provable balance verification, immutable ledger chains, and movement logs for the User ID above.</p>
+      
+      <div class="btn-group">
+        <button class="btn btn-secondary" id="btnVerifyAudit">Verify Audit Chain (/audit)</button>
+        <button class="btn btn-secondary" id="btnGetLedger">Ledger History (/ledger)</button>
+        <button class="btn btn-secondary" id="btnGetHistory">Movement History (/history)</button>
+      </div>
+
+      <div class="result-box" id="auditResultContainer" style="display: none;">
+        <label id="auditResultTitle" style="margin-bottom: 0.5rem; display: block; font-weight: 600; color: var(--accent);"></label>
+        <pre id="displayAuditResult"></pre>
+      </div>
+    </section>
+
+    <!-- SECTION 3: Create & Follow Job -->
+    <section class="card">
+      <h2>3. Start & Follow Job</h2>
+      <form id="jobForm">
+        <div class="grid-2">
+          <div class="form-group">
+            <label for="jobUserIdInput">User ID (UUID)</label>
+            <input type="text" id="jobUserIdInput" placeholder="e.g. a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" required>
+          </div>
+          <div class="form-group">
+            <label for="jobCostInput">Cost (Credits)</label>
+            <input type="number" id="jobCostInput" value="30" min="1" step="1" required>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="promptInput">Prompt</label>
+          <textarea id="promptInput" placeholder="Analyze sales report for Q3..." required></textarea>
+        </div>
+        <button type="submit" class="btn" id="btnSubmitJob">Submit & Execute Job</button>
+      </form>
+
+      <div id="jobStatusSection" style="display: none; margin-top: 1.25rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+          <div>
+            <span style="font-size: 0.85rem; color: var(--text-muted);">Tracking Job ID: </span>
+            <strong id="displayJobId">-</strong>
+          </div>
+          <span id="displayJobStatus" class="badge badge-pending">PENDING</span>
+        </div>
+
+        <div class="result-box" id="jobResultContainer" style="display: none;">
+          <label style="margin-bottom: 0.5rem; display: block; font-weight: 600;">Result / Output:</label>
+          <pre id="displayJobResult"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 4: Job Management & Audit Notes -->
+    <section class="card">
+      <h2>4. Job Lifecycle & Audit Notes</h2>
+      <div class="form-group">
+        <label for="targetJobIdInput">Target Job ID (UUID)</label>
+        <input type="text" id="targetJobIdInput" placeholder="Enter Job ID to inspect or manage">
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-secondary" id="btnGetJobDetails">Get Job Details (/jobs/:id)</button>
+        <button class="btn btn-success" id="btnCompleteJob">Complete Job (/complete)</button>
+        <button class="btn btn-danger" id="btnFailJob">Fail Job (/fail)</button>
+        <button class="btn btn-secondary" id="btnGetJobNotes">View Notes (/notes)</button>
+      </div>
+
+      <!-- Add Note Sub-form -->
+      <div style="margin-top: 1rem; border-top: 1px dashed var(--border); padding-top: 0.75rem;">
+        <label for="jobNoteInput">Add Audit Note (Module B4)</label>
+        <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+          <input type="text" id="jobNoteInput" placeholder="e.g. Reviewed output format for compliance..." style="flex: 1;">
+          <button class="btn btn-secondary" id="btnAddJobNote">Post Note</button>
+        </div>
+      </div>
+
+      <div class="result-box" id="jobActionOutputContainer" style="display: none;">
+        <label id="jobActionOutputTitle" style="margin-bottom: 0.5rem; display: block; font-weight: 600; color: var(--accent);"></label>
+        <pre id="displayJobActionOutput"></pre>
+      </div>
+    </section>
+
+    <!-- SECTION 5: Provider Webhook Simulator (Module B3) -->
+    <section class="card">
+      <h2>5. Provider Webhook Simulator (HMAC-SHA256)</h2>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+        Simulate signed external provider events delivered to <code>POST /webhooks/provider</code> with verified <code>x-signature</code>.
+      </p>
+
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="webhookSecretInput">Webhook Shared Secret</label>
+          <input type="text" id="webhookSecretInput" value="webhook_shared_secret" placeholder="Shared secret key">
+        </div>
+        <div class="form-group">
+          <label for="webhookEventIdInput">Event ID</label>
+          <input type="text" id="webhookEventIdInput" placeholder="evt_123456789">
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="webhookJobIdInput">Job ID (UUID)</label>
+          <input type="text" id="webhookJobIdInput" placeholder="Job ID to report result for">
+        </div>
+        <div class="form-group">
+          <label for="webhookResultSelect">Result Outcome</label>
+          <select id="webhookResultSelect">
+            <option value="success">success</option>
+            <option value="failure">failure</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-warning" id="btnSendWebhook">Compute HMAC & Send Webhook</button>
+      </div>
+
+      <div class="result-box" id="webhookOutputContainer" style="display: none;">
+        <label id="webhookOutputTitle" style="margin-bottom: 0.5rem; display: block; font-weight: 600; color: var(--accent);"></label>
+        <pre id="displayWebhookOutput"></pre>
+      </div>
+    </section>
+
+    <!-- SECTION 6: Knowledge Store Search -->
+    <section class="card">
+      <h2>6. Knowledge Store Search</h2>
+      <div style="display: flex; gap: 0.5rem; align-items: flex-end; margin-bottom: 1rem;">
+        <div class="form-group" style="flex: 1; margin-bottom: 0;">
+          <label for="searchQueryInput">Semantic Search Query</label>
+          <input type="text" id="searchQueryInput" placeholder="Search prompt patterns, guidelines...">
+        </div>
+        <button class="btn" id="btnSearchKnowledge">Search</button>
+      </div>
+
+      <div id="knowledgeResults"></div>
+    </section>
+  </div>
+
+  <script>
+    // Elements - User & Balance & Top-up
+    const userIdInput = document.getElementById('userIdInput');
+    const topUpAmountInput = document.getElementById('topUpAmountInput');
+    const btnCheckBalance = document.getElementById('btnCheckBalance');
+    const btnTopUp = document.getElementById('btnTopUp');
+    const balanceContainer = document.getElementById('balanceContainer');
+    const statBalance = document.getElementById('statBalance');
+    const statReserved = document.getElementById('statReserved');
+
+    // Elements - Audit & Ledger History
+    const btnVerifyAudit = document.getElementById('btnVerifyAudit');
+    const btnGetLedger = document.getElementById('btnGetLedger');
+    const btnGetHistory = document.getElementById('btnGetHistory');
+    const auditResultContainer = document.getElementById('auditResultContainer');
+    const auditResultTitle = document.getElementById('auditResultTitle');
+    const displayAuditResult = document.getElementById('displayAuditResult');
+
+    // Elements - Job Creation
+    const jobForm = document.getElementById('jobForm');
+    const jobUserIdInput = document.getElementById('jobUserIdInput');
+    const jobCostInput = document.getElementById('jobCostInput');
+    const promptInput = document.getElementById('promptInput');
+    const btnSubmitJob = document.getElementById('btnSubmitJob');
+    const jobStatusSection = document.getElementById('jobStatusSection');
+    const displayJobId = document.getElementById('displayJobId');
+    const displayJobStatus = document.getElementById('displayJobStatus');
+    const jobResultContainer = document.getElementById('jobResultContainer');
+    const displayJobResult = document.getElementById('displayJobResult');
+
+    // Elements - Job Management & Notes
+    const targetJobIdInput = document.getElementById('targetJobIdInput');
+    const btnGetJobDetails = document.getElementById('btnGetJobDetails');
+    const btnCompleteJob = document.getElementById('btnCompleteJob');
+    const btnFailJob = document.getElementById('btnFailJob');
+    const btnGetJobNotes = document.getElementById('btnGetJobNotes');
+    const jobNoteInput = document.getElementById('jobNoteInput');
+    const btnAddJobNote = document.getElementById('btnAddJobNote');
+    const jobActionOutputContainer = document.getElementById('jobActionOutputContainer');
+    const jobActionOutputTitle = document.getElementById('jobActionOutputTitle');
+    const displayJobActionOutput = document.getElementById('displayJobActionOutput');
+
+    // Elements - Webhook Simulator
+    const webhookSecretInput = document.getElementById('webhookSecretInput');
+    const webhookEventIdInput = document.getElementById('webhookEventIdInput');
+    const webhookJobIdInput = document.getElementById('webhookJobIdInput');
+    const webhookResultSelect = document.getElementById('webhookResultSelect');
+    const btnSendWebhook = document.getElementById('btnSendWebhook');
+    const webhookOutputContainer = document.getElementById('webhookOutputContainer');
+    const webhookOutputTitle = document.getElementById('webhookOutputTitle');
+    const displayWebhookOutput = document.getElementById('displayWebhookOutput');
+
+    // Elements - Knowledge
+    const searchQueryInput = document.getElementById('searchQueryInput');
+    const btnSearchKnowledge = document.getElementById('btnSearchKnowledge');
+    const knowledgeResults = document.getElementById('knowledgeResults');
+
+    let activePollingInterval = null;
+
+    // Helper: auto-generate event id
+    webhookEventIdInput.value = 'evt_' + Math.random().toString(36).substring(2, 11);
+
+    // Synchronize User & Job IDs
+    userIdInput.addEventListener('input', () => {
+      if (!jobUserIdInput.value || jobUserIdInput.dataset.synced !== 'false') {
+        jobUserIdInput.value = userIdInput.value;
+      }
+    });
+    jobUserIdInput.addEventListener('input', () => {
+      jobUserIdInput.dataset.synced = 'false';
+    });
+    targetJobIdInput.addEventListener('input', () => {
+      webhookJobIdInput.value = targetJobIdInput.value;
+    });
+
+    function getSelectedUserId() {
+      return (userIdInput.value || jobUserIdInput.value).trim();
+    }
+
+    function getTargetJobId() {
+      return targetJobIdInput.value.trim();
+    }
+
+    function displayJobActionResult(title, data) {
+      jobActionOutputTitle.textContent = title;
+      displayJobActionOutput.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+      jobActionOutputContainer.style.display = 'block';
+    }
+
+    // Native Web Crypto HMAC-SHA256
+    async function computeHmacSha256(secret, message) {
+      const enc = new TextEncoder();
+      const key = await window.crypto.subtle.importKey(
+        'raw',
+        enc.encode(secret),
+        { name: 'HMAC', hash: { name: 'SHA-256' } },
+        false,
+        ['sign']
+      );
+      const signature = await window.crypto.subtle.sign('HMAC', key, enc.encode(message));
+      return Array.from(new Uint8Array(signature))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+    }
+
+    // 1. Balance Flow
+    async function loadBalance() {
+      const userId = getSelectedUserId();
+      if (!userId) {
+        alert('Please enter a valid User ID (UUID)');
+        return;
+      }
+      try {
+        const res = await fetch(`/users/${encodeURIComponent(userId)}/balance`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to fetch balance');
+        
+        statBalance.textContent = data.balance ?? data.availableCredits ?? 0;
+        statReserved.textContent = data.reservedCredits ?? data.reserved ?? 0;
+        balanceContainer.style.display = 'flex';
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+    btnCheckBalance.addEventListener('click', loadBalance);
+
+    // 2. Top-Up Flow (POST /users/topup)
+    async function topUpCredits() {
+      const userId = getSelectedUserId();
+      const amount = parseInt(topUpAmountInput.value, 10);
+      if (!userId || isNaN(amount) || amount <= 0) {
+        alert('Please enter a valid User ID (UUID) and positive top-up amount');
+        return;
+      }
+
+      btnTopUp.disabled = true;
+      try {
+        const res = await fetch('/users/topup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, amount })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to top up credits');
+        alert(`Successfully topped up ${amount} credits!`);
+        loadBalance();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        btnTopUp.disabled = false;
+      }
+    }
+    btnTopUp.addEventListener('click', topUpCredits);
+
+    // 3. Audit & History Inspector
+    async function fetchAndDisplay(endpoint, title) {
+      const userId = getSelectedUserId();
+      if (!userId) {
+        alert('Please enter a valid User ID (UUID)');
+        return;
+      }
+      auditResultTitle.textContent = title;
+      displayAuditResult.textContent = 'Loading...';
+      auditResultContainer.style.display = 'block';
+
+      try {
+        const res = await fetch(endpoint.replace(':id', encodeURIComponent(userId)));
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Request failed');
+        displayAuditResult.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        displayAuditResult.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    btnVerifyAudit.addEventListener('click', () => fetchAndDisplay('/users/:id/audit', 'Cryptographic Audit Verification (/users/:id/audit)'));
+    btnGetLedger.addEventListener('click', () => fetchAndDisplay('/users/:id/ledger', 'Ledger Chain History (/users/:id/ledger)'));
+    btnGetHistory.addEventListener('click', () => fetchAndDisplay('/users/:id/history', 'Movement History & Daily Aggregates (/users/:id/history)'));
+
+    // 4. Job Submission & Tracking
+    jobForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const userId = jobUserIdInput.value.trim();
+      const cost = parseInt(jobCostInput.value, 10);
+      const prompt = promptInput.value.trim();
+
+      if (!userId || isNaN(cost) || cost <= 0 || !prompt) {
+        alert('Please provide a valid User ID (UUID), positive cost, and prompt.');
+        return;
+      }
+
+      if (activePollingInterval) {
+        clearInterval(activePollingInterval);
+        activePollingInterval = null;
+      }
+
+      btnSubmitJob.disabled = true;
+      jobStatusSection.style.display = 'block';
+      jobResultContainer.style.display = 'none';
+      displayJobStatus.className = 'badge badge-pending';
+      displayJobStatus.textContent = 'SUBMITTING...';
+
+      try {
+        const res = await fetch('/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, cost, prompt })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to submit job');
+
+        const jobId = data.jobId || data.id;
+        displayJobId.textContent = jobId;
+        targetJobIdInput.value = jobId;
+        webhookJobIdInput.value = jobId;
+
+        const initialStatus = (data.status || 'pending').toLowerCase();
+        displayJobStatus.className = `badge badge-${initialStatus}`;
+        displayJobStatus.textContent = initialStatus.toUpperCase();
+
+        if (getSelectedUserId()) loadBalance();
+
+        // Poll without reloading page
+        activePollingInterval = setInterval(() => pollJobStatus(jobId), 1000);
+      } catch (err) {
+        alert(err.message);
+        displayJobStatus.className = 'badge badge-failed';
+        displayJobStatus.textContent = 'ERROR';
+      } finally {
+        btnSubmitJob.disabled = false;
+      }
+    });
+
+    async function pollJobStatus(jobId) {
+      try {
+        const res = await fetch(`/jobs/${encodeURIComponent(jobId)}`);
+        if (!res.ok) return;
+        const job = await res.json();
+        const status = (job.status || 'pending').toLowerCase();
+
+        displayJobStatus.className = `badge badge-${status}`;
+        displayJobStatus.textContent = status.toUpperCase();
+
+        if (status === 'completed' || status === 'failed') {
+          clearInterval(activePollingInterval);
+          activePollingInterval = null;
+          jobResultContainer.style.display = 'block';
+          displayJobResult.textContent = job.result || job.error || JSON.stringify(job, null, 2);
+          if (getSelectedUserId()) loadBalance();
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    }
+
+    // 5. Job Management (GET /jobs/:id, POST complete, POST fail, Notes)
+    btnGetJobDetails.addEventListener('click', async () => {
+      const jobId = getTargetJobId();
+      if (!jobId) return alert('Please enter a Job ID (UUID)');
+      try {
+        const res = await fetch(`/jobs/${encodeURIComponent(jobId)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to get job details');
+        displayJobActionResult(`Job Details (/jobs/${jobId})`, data);
+      } catch (err) {
+        displayJobActionResult('Error', err.message);
+      }
+    });
+
+    btnCompleteJob.addEventListener('click', async () => {
+      const jobId = getTargetJobId();
+      if (!jobId) return alert('Please enter a Job ID (UUID)');
+      try {
+        const res = await fetch(`/jobs/${encodeURIComponent(jobId)}/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ result: 'Job manually completed via console' })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to complete job');
+        displayJobActionResult(`Job Completed (/jobs/${jobId}/complete)`, data);
+        if (getSelectedUserId()) loadBalance();
+      } catch (err) {
+        displayJobActionResult('Error', err.message);
+      }
+    });
+
+    btnFailJob.addEventListener('click', async () => {
+      const jobId = getTargetJobId();
+      if (!jobId) return alert('Please enter a Job ID (UUID)');
+      try {
+        const res = await fetch(`/jobs/${encodeURIComponent(jobId)}/fail`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: 'Job manually failed via console' })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to fail job');
+        displayJobActionResult(`Job Failed (/jobs/${jobId}/fail)`, data);
+        if (getSelectedUserId()) loadBalance();
+      } catch (err) {
+        displayJobActionResult('Error', err.message);
+      }
+    });
+
+    btnAddJobNote.addEventListener('click', async () => {
+      const jobId = getTargetJobId();
+      const note = jobNoteInput.value.trim();
+      if (!jobId || !note) return alert('Please provide both Job ID (UUID) and Note content');
+      try {
+        const res = await fetch(`/jobs/${encodeURIComponent(jobId)}/notes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to add note');
+        jobNoteInput.value = '';
+        displayJobActionResult(`Note Added (/jobs/${jobId}/notes)`, data);
+      } catch (err) {
+        displayJobActionResult('Error', err.message);
+      }
+    });
+
+    btnGetJobNotes.addEventListener('click', async () => {
+      const jobId = getTargetJobId();
+      if (!jobId) return alert('Please enter a Job ID (UUID)');
+      try {
+        const res = await fetch(`/jobs/${encodeURIComponent(jobId)}/notes`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to fetch notes');
+        displayJobActionResult(`Job Audit Notes (/jobs/${jobId}/notes)`, data);
+      } catch (err) {
+        displayJobActionResult('Error', err.message);
+      }
+    });
+
+    // 6. Provider Webhook Simulator Flow (Module B3)
+    btnSendWebhook.addEventListener('click', async () => {
+      const secret = webhookSecretInput.value.trim();
+      const eventId = webhookEventIdInput.value.trim() || ('evt_' + Math.random().toString(36).substring(2, 11));
+      const jobId = webhookJobIdInput.value.trim() || getTargetJobId();
+      const result = webhookResultSelect.value;
+
+      if (!secret || !jobId) {
+        alert('Please provide Webhook Shared Secret and Job ID (UUID)');
+        return;
+      }
+
+      const payload = {
+        eventId,
+        jobId,
+        result
+      };
+
+      const payloadString = JSON.stringify(payload);
+      btnSendWebhook.disabled = true;
+      webhookOutputTitle.textContent = 'Webhook Delivery (POST /webhooks/provider)';
+      displayWebhookOutput.textContent = 'Computing HMAC-SHA256 signature and sending request...';
+      webhookOutputContainer.style.display = 'block';
+
+      try {
+        const signature = await computeHmacSha256(secret, payloadString);
+        
+        const res = await fetch('/webhooks/provider', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-signature': signature
+          },
+          body: payloadString
+        });
+
+        const data = await res.json();
+        displayWebhookOutput.textContent = JSON.stringify({
+          sentHeaders: { 'x-signature': signature, 'content-type': 'application/json' },
+          sentPayload: payload,
+          statusCode: res.status,
+          responseBody: data
+        }, null, 2);
+
+        // Regenerate event ID for next test
+        webhookEventIdInput.value = 'evt_' + Math.random().toString(36).substring(2, 11);
+        if (getSelectedUserId()) loadBalance();
+      } catch (err) {
+        displayWebhookOutput.textContent = `Webhook Delivery Error: ${err.message}`;
+      } finally {
+        btnSendWebhook.disabled = false;
+      }
+    });
+
+    // 7. Knowledge Store Search Flow
+    async function searchKnowledge() {
+      const q = searchQueryInput.value.trim();
+      if (!q) return;
+
+      btnSearchKnowledge.disabled = true;
+      try {
+        const res = await fetch(`/knowledge/search?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to search knowledge store');
+
+        knowledgeResults.innerHTML = '';
+        const items = Array.isArray(data) ? data : (data.results || []);
+        if (items.length === 0) {
+          knowledgeResults.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">No results found.</p>';
+          return;
+        }
+
+        items.slice(0, 3).forEach((item) => {
+          const el = document.createElement('div');
+          el.className = 'knowledge-item';
+          el.innerHTML = `
+            <div class="knowledge-header">
+              <span class="knowledge-title">${item.title || 'Knowledge Entry'}</span>
+              <span class="knowledge-score">Score: ${typeof item.score === 'number' ? item.score.toFixed(3) : (item.score || 'N/A')}</span>
+            </div>
+            <div style="font-size: 0.85rem; color: #cbd5e1;">${item.content || item.text || ''}</div>
+          `;
+          knowledgeResults.appendChild(el);
+        });
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        btnSearchKnowledge.disabled = false;
+      }
+    }
+
+    btnSearchKnowledge.addEventListener('click', searchKnowledge);
+    searchQueryInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') searchKnowledge();
+    });
+  </script>
+</body>
+</html>

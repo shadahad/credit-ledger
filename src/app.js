@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const jobsController = require('./controllers/jobs.controller');
 const usersController = require('./controllers/users.controller');
@@ -17,6 +18,9 @@ app.use(
     }
   })
 );
+
+// Module B8: Serve static frontend files
+app.use(express.static(path.join(__dirname, '../public')));
 
 // ==========================================
 // Job Routes
